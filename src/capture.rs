@@ -5,14 +5,35 @@ use anyhow::{bail, Context, Result};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Grab the primary monitor and encode it as JPEG (quality 72).
+/// Capture the entire virtual desktop (all monitors) as one JPEG.
 pub fn screenshot_jpeg() -> Result<Vec<u8>> {
     let monitors = xcap::Monitor::all().context("enumerate monitors")?;
-    let m = monitors.into_iter().next().context("no monitor found")?;
-    let img = m.capture_image().context("capture_image")?;
-    let (w, h) = (img.width(), img.height());
-    let raw = img.into_raw();
-    encode_jpeg_rgba(&raw, w, h)
+    if monitors.is_empty() {
+        bail!("no monitors found");
+    }
+    let min_x = monitors.iter().map(|m| m.x()).min().unwrap_or(0);
+    let min_y = monitors.iter().map(|m| m.y()).min().unwrap_or(0);
+    let max_x = monitors
+        .iter()
+        .map(|m| m.x() + m.width() as i32)
+        .max()
+        .unwrap_or(0);
+    let max_y = monitors
+        .iter()
+        .map(|m| m.y() + m.height() as i32)
+        .max()
+        .unwrap_or(0);
+    let w = (max_x - min_x).max(1) as u32;
+    let h = (max_y - min_y).max(1) as u32;
+
+    let mut canvas = image::RgbaImage::new(w, h);
+    for m in &monitors {
+        let img = m.capture_image().context("capture_image")?;
+        let ox = (m.x() - min_x) as i64;
+        let oy = (m.y() - min_y) as i64;
+        image::imageops::overlay(&mut canvas, &img, ox, oy);
+    }
+    encode_jpeg_rgba(&canvas.into_raw(), w, h)
 }
 
 /// JPEG has no alpha channel — drop RGBA to RGB8 before encoding.
