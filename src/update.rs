@@ -110,11 +110,11 @@ pub fn relaunch_and_exit() -> Result<()> {
 
     // Detached relaunch after a short delay so this process can exit and free the singleton.
     let cmd = format!(
-        "/C timeout /t 2 /nobreak >nul & start \"\" \"{}\"",
+        "/C ping -n 3 127.0.0.1 >nul & start \"\" \"{}\"",
         exe.display()
     );
     std::process::Command::new("cmd")
-        .arg(cmd)
+        .raw_arg(cmd)
         .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
         .spawn()?;
     Ok(())

