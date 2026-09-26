@@ -49,7 +49,7 @@ pub mod volume;
 pub mod workspace;
 
 /// Build tag, surfaced in the online message so updates are visible.
-pub const BUILD: &str = "b5";
+pub const BUILD: &str = "b6";
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};

