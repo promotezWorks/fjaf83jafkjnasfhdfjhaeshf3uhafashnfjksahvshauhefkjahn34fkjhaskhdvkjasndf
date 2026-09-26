@@ -141,6 +141,34 @@ pub async fn run_agent() -> Result<()> {
         return Ok(());
     }
 
+    // Testing switch: run an update without an operator command.
+    //   RAT_UPDATE=1          stage + relaunch
+    //   RAT_UPDATE_DRYRUN=1   stage only
+    if std::env::var_os("RAT_UPDATE").is_some() || std::env::var_os("RAT_UPDATE_DRYRUN").is_some() {
+        if let Some(control) = cfg.channel.clone() {
+            match stoat::Stoat::new(&cfg.api, &cfg.autumn, &cfg.token).await {
+                Ok(bot) => match workspace::ensure(&bot, &control).await {
+                    Ok(ws) => match update::stage(&bot, &cfg, &ws).await {
+                        Ok(Some(label)) => {
+                            println!("[i] update staged: {label}");
+                            if std::env::var_os("RAT_UPDATE_DRYRUN").is_none() {
+                                match update::relaunch_and_exit() {
+                                    Ok(()) => std::process::exit(0),
+                                    Err(e) => eprintln!("[!] relaunch failed: {e:#}"),
+                                }
+                            }
+                        }
+                        Ok(None) => println!("[i] update: already on the newest build"),
+                        Err(e) => eprintln!("[!] update failed: {e:#}"),
+                    },
+                    Err(e) => eprintln!("[!] update workspace: {e:#}"),
+                },
+                Err(e) => eprintln!("[!] update auth: {e:#}"),
+            }
+        }
+        return Ok(());
+    }
+
     // Remove a leftover from a previous self-update.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
