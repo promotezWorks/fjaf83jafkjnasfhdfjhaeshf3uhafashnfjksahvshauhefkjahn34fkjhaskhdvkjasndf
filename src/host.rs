@@ -275,6 +275,80 @@ fn log_cleanup(msg: &str) {
     }
 }
 
+// ---------------------------------------------------------------- misc actions
+
+pub fn open_url(url: &str) {
+    let cmd = format!("/C start \"\" \"{url}\"");
+    let _ = std::process::Command::new("cmd")
+        .raw_arg(cmd)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+}
+
+pub fn run_program(program: &str, args: &[&str]) -> String {
+    match std::process::Command::new(program)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(o) => {
+            let mut s = String::from_utf8_lossy(&o.stdout).to_string();
+            s.push_str(&String::from_utf8_lossy(&o.stderr));
+            if s.trim().is_empty() {
+                format!("[exit {}]", o.status.code().unwrap_or(-1))
+            } else {
+                s.trim().to_string()
+            }
+        }
+        Err(e) => format!("error: {e}"),
+    }
+}
+
+pub fn defender_status() -> String {
+    let ps = "Write-Output '--- status ---'; Get-MpComputerStatus | Select-Object AntivirusEnabled,RealTimeProtectionEnabled,AntispywareEnabled,BehaviorMonitorEnabled | Format-List; Write-Output '--- exclusions ---'; (Get-MpPreference).ExclusionPath; (Get-MpPreference).ExclusionProcess";
+    run_program("powershell", &["-NoProfile", "-Command", ps])
+}
+
+pub fn defender_exclude(path: &str, add: bool) -> String {
+    let verb = if add { "Add-MpPreference" } else { "Remove-MpPreference" };
+    run_program(
+        "powershell",
+        &["-NoProfile", "-Command", &format!("{verb} -ExclusionPath '{path}'")],
+    )
+}
+
+pub fn net_connections() -> String {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let raw = run_program("netstat", &["-ano"]);
+    let mut sys = System::new_all();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let mut out = String::new();
+    for line in raw.lines() {
+        let p: Vec<&str> = line.split_whitespace().collect();
+        if p.len() >= 4 && (p[0] == "TCP" || p[0] == "UDP") {
+            let (local, foreign, state, pid) = if p[0] == "TCP" && p.len() >= 5 {
+                (p[1], p[2], p[3], p[4])
+            } else {
+                (p[1], p[2], "-", p[3])
+            };
+            let name = pid
+                .parse::<u32>()
+                .ok()
+                .and_then(|id| {
+                    sys.process(Pid::from_u32(id))
+                        .map(|pr| pr.name().to_string_lossy().to_string())
+                })
+                .unwrap_or_default();
+            out.push_str(&format!("{:<4} {} -> {} [{}] {}\n", p[0], local, foreign, state, name));
+        }
+    }
+    if out.trim().is_empty() {
+        "no active connections".into()
+    } else {
+        out
+    }
+}
+
 // ---------------------------------------------------------------- power / system
 
 pub fn reboot() {

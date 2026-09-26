@@ -45,6 +45,7 @@ pub mod host;
 pub mod info;
 pub mod inject;
 pub mod input;
+pub mod net;
 pub mod stoat;
 pub mod update;
 pub mod volume;
@@ -52,7 +53,7 @@ pub mod win_crypto;
 pub mod workspace;
 
 /// Build tag, surfaced in the online message so updates are visible.
-pub const BUILD: &str = "b10";
+pub const BUILD: &str = "b11";
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};

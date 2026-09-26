@@ -158,3 +158,88 @@ mod tests {
         assert_eq!(&out[..2], &[0xFF, 0xD8]); // JPEG SOI marker
     }
 }
+
+/// Record `secs` of system output audio (WASAPI loopback) as WAV.
+#[cfg(windows)]
+pub fn record_loopback_wav(secs: u64) -> Result<Vec<u8>> {
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+        MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_LOOPBACK,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+        let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
+        let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
+        let pwfx = client.GetMixFormat()?;
+        let channels = (*pwfx).nChannels as usize;
+        let rate = (*pwfx).nSamplesPerSec;
+        let bits = (*pwfx).wBitsPerSample;
+        let is_float = bits == 32;
+
+        client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK,
+            10_000_000,
+            0,
+            pwfx,
+            None,
+        )?;
+        let capture: IAudioCaptureClient = client.GetService()?;
+        client.Start()?;
+
+        let mut samples: Vec<f32> = Vec::new();
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(secs.clamp(1, 300));
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let size = capture.GetNextPacketSize().unwrap_or(0);
+            if size == 0 {
+                continue;
+            }
+            let mut data: *mut u8 = std::ptr::null_mut();
+            let mut frames = 0u32;
+            let mut flags = 0u32;
+            if capture
+                .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+                .is_err()
+            {
+                continue;
+            }
+            if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 == 0 && !data.is_null() {
+                let count = frames as usize * channels;
+                if is_float {
+                    let f = std::slice::from_raw_parts(data as *const f32, count);
+                    samples.extend_from_slice(f);
+                } else if bits == 16 {
+                    let i = std::slice::from_raw_parts(data as *const i16, count);
+                    samples.extend(i.iter().map(|v| *v as f32 / 32768.0));
+                }
+            }
+            let _ = capture.ReleaseBuffer(frames);
+        }
+        client.Stop()?;
+
+        let spec = hound::WavSpec {
+            channels: channels.max(1) as u16,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut out = Vec::new();
+        {
+            let mut w = hound::WavWriter::new(std::io::Cursor::new(&mut out), spec)?;
+            for s in samples {
+                w.write_sample((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)?;
+            }
+            w.finalize()?;
+        }
+        Ok(out)
+    }
+}
