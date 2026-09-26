@@ -1,0 +1,18 @@
+# Rust build output
+/target
+
+# Runtime configuration (operator-specific, never commit)
+config.json
+
+# Secret baked into the binary at build time (agent bot token) — never commit
+/agent.secret
+
+# Self-update / scratch artifacts
+/stoat-rat.new
+/stoat-rat.old
+/stoat-rat.d
+
+# Logs / captured artifacts
+*.log
+*.wav
+*.jpg

@@ -1,0 +1,113 @@
+// language: Rust, file: src/capture.rs, target: Windows
+// Screen capture (xcap -> JPEG) and microphone capture (cpal -> 16-bit WAV).
+#![allow(dead_code)]
+use anyhow::{bail, Context, Result};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// Grab the primary monitor and encode it as JPEG (quality 72).
+pub fn screenshot_jpeg() -> Result<Vec<u8>> {
+    let monitors = xcap::Monitor::all().context("enumerate monitors")?;
+    let m = monitors.into_iter().next().context("no monitor found")?;
+    let img = m.capture_image().context("capture_image")?;
+    let (w, h) = (img.width(), img.height());
+    let raw = img.into_raw();
+    encode_jpeg_rgba(&raw, w, h)
+}
+
+/// JPEG has no alpha channel — drop RGBA to RGB8 before encoding.
+fn encode_jpeg_rgba(raw: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
+    let rgba = image::RgbaImage::from_raw(w, h, raw.to_vec()).context("bad image buffer")?;
+    let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
+    let mut out = Vec::new();
+    {
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+            std::io::Cursor::new(&mut out),
+            72,
+        );
+        enc.encode(rgb.as_raw(), w, h, image::ExtendedColorType::Rgb8)
+            .context("jpeg encode")?;
+    }
+    Ok(out)
+}
+
+/// Record `secs` seconds from the default input device, return WAV bytes.
+pub fn record_wav(secs: u64) -> Result<Vec<u8>> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::{FromSample, Sample, SizedSample};
+
+    fn build<T>(
+        device: &cpal::Device,
+        cfg: &cpal::StreamConfig,
+        buf: Arc<Mutex<Vec<f32>>>,
+    ) -> Result<cpal::Stream>
+    where
+        T: SizedSample + Send + 'static,
+        f32: FromSample<T>,
+    {
+        let sink = buf.clone();
+        let stream = device.build_input_stream(
+            cfg,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                let mut g = sink.lock().unwrap();
+                for &v in data {
+                    g.push(f32::from_sample(v));
+                }
+            },
+            |e| eprintln!("mic: {e}"),
+            None,
+        )?;
+        Ok(stream)
+    }
+
+    let host = cpal::default_host();
+    let device = host.default_input_device().context("no input device")?;
+    let supported = device.default_input_config().context("input config")?;
+    let sample_format = supported.sample_format();
+    let cfg: cpal::StreamConfig = supported.into();
+    let channels = cfg.channels as usize;
+    let sample_rate = cfg.sample_rate.0;
+    let buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let stream = match sample_format {
+        cpal::SampleFormat::F32 => build::<f32>(&device, &cfg, buf.clone())?,
+        cpal::SampleFormat::I16 => build::<i16>(&device, &cfg, buf.clone())?,
+        cpal::SampleFormat::U16 => build::<u16>(&device, &cfg, buf.clone())?,
+        cpal::SampleFormat::I32 => build::<i32>(&device, &cfg, buf.clone())?,
+        other => bail!("unsupported sample format {other:?}"),
+    };
+    stream.play().context("start stream")?;
+    std::thread::sleep(Duration::from_secs(secs.clamp(1, 300)));
+    drop(stream);
+
+    let data = buf.lock().unwrap().clone();
+    let spec = hound::WavSpec {
+        channels: channels.max(1) as u16,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut out = Vec::new();
+    {
+        let mut w = hound::WavWriter::new(std::io::Cursor::new(&mut out), spec)?;
+        for s in data {
+            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            w.write_sample(v)?;
+        }
+        w.finalize()?;
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_rgba_source_as_jpeg() {
+        let raw = vec![128u8; 4 * 16 * 16];
+        let out = encode_jpeg_rgba(&raw, 16, 16).expect("encode");
+        assert!(out.len() > 100);
+        assert_eq!(&out[..2], &[0xFF, 0xD8]); // JPEG SOI marker
+    }
+}
