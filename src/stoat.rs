@@ -199,6 +199,34 @@ impl Stoat {
         }
         Ok(r.bytes().await?.to_vec())
     }
+
+    pub async fn delete_message(&self, channel: &str, id: &str) -> Result<bool> {
+        let r = self
+            .http
+            .delete(format!("{}/channels/{}/messages/{}", self.api, channel, id))
+            .header("X-Bot-Token", &self.token)
+            .send()
+            .await?;
+        Ok(r.status().is_success())
+    }
+
+    /// Delete every message in a channel (the bot's own messages). Returns the count removed.
+    pub async fn purge_channel(&self, channel: &str) -> Result<usize> {
+        let page = self
+            .get_json(&format!("/channels/{channel}/messages?limit=100"))
+            .await?;
+        let mut removed = 0usize;
+        if let Some(arr) = page.as_array() {
+            for m in arr {
+                if let Some(id) = m["_id"].as_str() {
+                    if self.delete_message(channel, id).await.unwrap_or(false) {
+                        removed += 1;
+                    }
+                }
+            }
+        }
+        Ok(removed)
+    }
 }
 
 fn trim(s: &str) -> String {

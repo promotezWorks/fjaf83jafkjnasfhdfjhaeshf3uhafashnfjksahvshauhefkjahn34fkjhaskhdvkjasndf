@@ -46,6 +46,9 @@ pub mod stoat;
 pub mod update;
 pub mod workspace;
 
+/// Build tag, surfaced in the online message so updates are visible.
+pub const BUILD: &str = "b3";
+
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -282,8 +285,13 @@ fn process(cfg: &config::Config, bot: &stoat::Stoat, v: Value) {
                             );
                             *AGENT_WS.lock().unwrap() = Some(ws.clone());
                             let _ = bot
-                                .send(&ws.channels.console, &format!("agent online: {}", ws.label))
+                                .send(
+                                    &ws.channels.console,
+                                    &format!("agent online: {} [{}]", ws.label, BUILD),
+                                )
                                 .await;
+                            // Keep #information to a single, current dump.
+                            let _ = bot.purge_channel(&ws.channels.info).await;
                             let text = info::dump(&cfg2, &ws).await;
                             let _ = bot.send_code(&ws.channels.info, &text).await;
                         }

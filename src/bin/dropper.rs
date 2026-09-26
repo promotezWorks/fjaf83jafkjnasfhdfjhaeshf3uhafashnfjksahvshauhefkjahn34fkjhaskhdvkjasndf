@@ -69,6 +69,8 @@ async fn run() -> anyhow::Result<()> {
 
     // 2. Persist: launcher copy + HKCU Run.
     if !is_launcher && !self_exe.as_os_str().is_empty() {
+        // Remove any existing launcher first — overwriting a Hidden/System file can be denied.
+        let _ = std::fs::remove_file(&launcher);
         if let Err(e) = std::fs::copy(&self_exe, &launcher) {
             log(&format!("launcher copy failed: {e}"));
         }

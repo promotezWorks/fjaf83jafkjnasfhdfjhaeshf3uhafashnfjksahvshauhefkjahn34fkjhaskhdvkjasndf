@@ -21,6 +21,16 @@ if (-not $Token) {
 }
 
 $upUrl = "https://cdn.stoatusercontent.com/attachments"
+
+# Declutter: delete prior build messages so the channel always shows only the newest build.
+try {
+    $existing = Invoke-RestMethod "https://api.stoat.chat/channels/$Channel/messages?limit=100" -Headers @{ "X-Bot-Token" = $Token }
+    foreach ($m in $existing) {
+        try { Invoke-RestMethod "https://api.stoat.chat/channels/$Channel/messages/$($m._id)" -Method Delete -Headers @{ "X-Bot-Token" = $Token } | Out-Null } catch {}
+    }
+    Write-Host "purged $(@($existing).Count) old #update message(s)"
+} catch {}
+
 $ids = @()
 $labels = @()
 foreach ($f in $Files) {
