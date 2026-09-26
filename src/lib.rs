@@ -49,7 +49,7 @@ pub mod volume;
 pub mod workspace;
 
 /// Build tag, surfaced in the online message so updates are visible.
-pub const BUILD: &str = "b6";
+pub const BUILD: &str = "b7";
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
@@ -289,7 +289,12 @@ fn process(cfg: &config::Config, bot: &stoat::Stoat, v: Value) {
                             let _ = bot
                                 .send(
                                     &ws.channels.console,
-                                    &format!("agent online: {} [{}]", ws.label, BUILD),
+                                    &format!(
+                                        "agent online: {} [{}]{}",
+                                        ws.label,
+                                        BUILD,
+                                        if host::is_elevated() { " (admin)" } else { "" }
+                                    ),
                                 )
                                 .await;
                             // Keep #information to a single, current dump.

