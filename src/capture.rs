@@ -99,6 +99,32 @@ pub fn record_wav(secs: u64) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Grab one frame from the default webcam and encode it as JPEG.
+#[cfg(windows)]
+pub fn webcam_jpeg() -> Result<Vec<u8>> {
+    use nokhwa::pixel_format::RgbFormat;
+    use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
+    use nokhwa::Camera;
+
+    let requested =
+        RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+    let mut camera = Camera::new(CameraIndex::Index(0), requested)?;
+    camera.open_stream()?;
+    let frame = camera.frame()?;
+    let img = frame.decode_image::<RgbFormat>()?;
+    let (w, h) = (img.width(), img.height());
+    let mut out = Vec::new();
+    {
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+            std::io::Cursor::new(&mut out),
+            75,
+        );
+        enc.encode(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)?;
+    }
+    camera.stop_stream().ok();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

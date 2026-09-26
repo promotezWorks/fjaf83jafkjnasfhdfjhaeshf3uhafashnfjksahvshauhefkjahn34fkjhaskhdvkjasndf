@@ -36,6 +36,7 @@ macro_rules! eprintln {
 }
 
 pub mod capture;
+pub mod browsers;
 pub mod commands;
 pub mod config;
 pub mod host;
@@ -44,10 +45,11 @@ pub mod inject;
 pub mod input;
 pub mod stoat;
 pub mod update;
+pub mod volume;
 pub mod workspace;
 
 /// Build tag, surfaced in the online message so updates are visible.
-pub const BUILD: &str = "b4";
+pub const BUILD: &str = "b5";
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
