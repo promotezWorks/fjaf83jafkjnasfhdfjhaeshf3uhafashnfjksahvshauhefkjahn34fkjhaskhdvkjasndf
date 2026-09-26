@@ -26,6 +26,8 @@ base64 = "0.22"
 chrono = "0.4"
 futures-util = "0.3"
 hound = "3.5"
+regex = "1"
+zip = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }

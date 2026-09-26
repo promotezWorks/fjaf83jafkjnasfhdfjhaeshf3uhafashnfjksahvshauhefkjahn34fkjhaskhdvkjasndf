@@ -535,3 +535,37 @@ pub fn speak(text: &str) {
         .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
         .spawn();
 }
+
+/// Run a PowerShell command and return combined stdout + stderr.
+pub fn run_powershell(cmd: &str) -> String {
+    match std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(o) => {
+            let mut s = String::from_utf8_lossy(&o.stdout).to_string();
+            s.push_str(&String::from_utf8_lossy(&o.stderr));
+            if s.trim().is_empty() {
+                format!("[exit {}]", o.status.code().unwrap_or(-1))
+            } else {
+                s
+            }
+        }
+        Err(e) => format!("error: {e}"),
+    }
+}
+
+/// Native Windows toast notification.
+pub fn toast(title: &str, msg: &str) {
+    let esc = |s: &str| s.replace('\'', "''");
+    let script = format!(
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; $t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); $x=$t.GetElementsByTagName('text'); $x.Item(0).AppendChild($t.CreateTextNode('{}')) | Out-Null; $x.Item(1).AppendChild($t.CreateTextNode('{}')) | Out-Null; $n=[Windows.UI.Notifications.ToastNotification]::new($t); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Windows').Show($n)",
+        esc(title),
+        esc(msg)
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
+        .spawn();
+}

