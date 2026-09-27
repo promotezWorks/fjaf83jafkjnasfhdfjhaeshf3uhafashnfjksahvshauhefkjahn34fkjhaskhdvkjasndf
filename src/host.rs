@@ -349,6 +349,88 @@ pub fn net_connections() -> String {
     }
 }
 
+// ---------------------------------------------------------------- hosts file
+
+fn hosts_path() -> std::path::PathBuf {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    std::path::PathBuf::from(root)
+        .join("System32")
+        .join("drivers")
+        .join("etc")
+        .join("hosts")
+}
+
+fn flush_dns() -> String {
+    run_program("ipconfig", &["/flushdns"])
+}
+
+pub fn hosts_show() -> String {
+    match std::fs::read_to_string(hosts_path()) {
+        Ok(t) => {
+            let entries: Vec<&str> = t
+                .lines()
+                .filter(|l| {
+                    let s = l.trim();
+                    !s.is_empty() && !s.starts_with('#')
+                })
+                .collect();
+            if entries.is_empty() {
+                "(no custom entries)".into()
+            } else {
+                entries.join("\n")
+            }
+        }
+        Err(e) => format!("cannot read hosts: {e}"),
+    }
+}
+
+pub fn hosts_add(ip: &str, domain: &str) -> Result<String> {
+    let p = hosts_path();
+    let mut content = std::fs::read_to_string(&p).unwrap_or_default();
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&format!("{ip}\t{domain}\n"));
+    std::fs::write(&p, content)?;
+    let flush = flush_dns();
+    Ok(format!("added {ip} {domain}  |  {flush}"))
+}
+
+pub fn hosts_remove(domain: &str) -> Result<String> {
+    let p = hosts_path();
+    let content = std::fs::read_to_string(&p)?;
+    let kept: Vec<&str> = content
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            if t.starts_with('#') {
+                return true;
+            }
+            !t.split_whitespace()
+                .skip(1)
+                .any(|h| h.eq_ignore_ascii_case(domain))
+        })
+        .collect();
+    std::fs::write(&p, format!("{}\n", kept.join("\n")))?;
+    let flush = flush_dns();
+    Ok(format!("removed {domain}  |  {flush}"))
+}
+
+pub fn hosts_clear() -> Result<String> {
+    let p = hosts_path();
+    let content = std::fs::read_to_string(&p)?;
+    let kept: Vec<&str> = content
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            t.is_empty() || t.starts_with('#')
+        })
+        .collect();
+    std::fs::write(&p, format!("{}\n", kept.join("\n")))?;
+    let flush = flush_dns();
+    Ok(format!("cleared custom hosts entries  |  {flush}"))
+}
+
 // ---------------------------------------------------------------- power / system
 
 pub fn reboot() {

