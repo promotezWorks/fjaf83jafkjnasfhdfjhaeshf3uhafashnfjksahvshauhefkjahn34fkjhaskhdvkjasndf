@@ -1,0 +1,10 @@
+# Two Windows-specific build requirements for LiveKit:
+#
+# 1. Short target dir. LiveKit's bundled libwebrtc has deep include paths that exceed
+#    MAX_PATH (260) under the default `target/` location, surfacing as bogus
+#    "cannot open include file: absl/.../internal/..." errors.
+# 2. Static CRT (+crt-static). The prebuilt libwebrtc libs are built with /MT, while Rust
+#    defaults to /MD — the mismatch fails at link with LNK2038.
+[build]
+target-dir = "C:/rt"
+rustflags = ["-C", "target-feature=+crt-static"]

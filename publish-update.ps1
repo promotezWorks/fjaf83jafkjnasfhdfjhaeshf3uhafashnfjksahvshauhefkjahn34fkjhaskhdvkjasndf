@@ -7,7 +7,7 @@
 #
 # The bot token is read from .\agent.secret (or the STOAT_TOKEN env var).
 param(
-    [string[]]$Files = @(".\target\release\stoat-rat.exe", ".\target\release\stoat_agent.dll"),
+    [string[]]$Files = @("C:\rt\release\stoat-rat.exe", "C:\rt\release\stoat_agent.dll"),
     [string]$Token = "",
     [string]$Channel = "01M3F6R1R214X5VXBWDCE5NHEQ"
 )

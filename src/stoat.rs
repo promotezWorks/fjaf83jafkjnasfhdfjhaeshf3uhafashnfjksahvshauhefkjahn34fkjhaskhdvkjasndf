@@ -53,6 +53,22 @@ impl Stoat {
         self.get(path).await
     }
 
+    pub async fn post_json(&self, path: &str, body: Value) -> Result<Value> {
+        let r = self
+            .http
+            .post(format!("{}{}", self.api, path))
+            .header("X-Bot-Token", &self.token)
+            .json(&body)
+            .send()
+            .await?;
+        let status = r.status();
+        let text = r.text().await.unwrap_or_default();
+        if !status.is_success() {
+            bail!("POST {path} -> {status}: {}", trim(&text));
+        }
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
     pub async fn create_channel(&self, server: &str, body: Value) -> Result<Value> {
         let r = self
             .http

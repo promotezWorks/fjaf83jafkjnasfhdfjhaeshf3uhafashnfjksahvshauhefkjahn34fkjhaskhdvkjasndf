@@ -5,8 +5,8 @@ use anyhow::{bail, Context, Result};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Capture the entire virtual desktop (all monitors) as one JPEG.
-pub fn screenshot_jpeg() -> Result<Vec<u8>> {
+/// Capture the entire virtual desktop (all monitors) as raw RGBA + dimensions.
+pub fn virtual_desktop_rgba() -> Result<(Vec<u8>, u32, u32)> {
     let monitors = xcap::Monitor::all().context("enumerate monitors")?;
     if monitors.is_empty() {
         bail!("no monitors found");
@@ -33,7 +33,13 @@ pub fn screenshot_jpeg() -> Result<Vec<u8>> {
         let oy = (m.y() - min_y) as i64;
         image::imageops::overlay(&mut canvas, &img, ox, oy);
     }
-    encode_jpeg_rgba(&canvas.into_raw(), w, h)
+    Ok((canvas.into_raw(), w, h))
+}
+
+/// Capture the entire virtual desktop as one JPEG.
+pub fn screenshot_jpeg() -> Result<Vec<u8>> {
+    let (raw, w, h) = virtual_desktop_rgba()?;
+    encode_jpeg_rgba(&raw, w, h)
 }
 
 /// JPEG has no alpha channel — drop RGBA to RGB8 before encoding.
@@ -159,7 +165,63 @@ mod tests {
     }
 }
 
-/// Record `secs` of system output audio (WASAPI loopback) as WAV.
+/// Start a mic capture stream that downmixes to mono i16 and appends to `buf`.
+pub fn start_mic_stream(
+    buf: std::sync::Arc<std::sync::Mutex<Vec<i16>>>,
+    _rate: u32,
+) -> Result<cpal::Stream> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::{FromSample, Sample, SizedSample};
+
+    fn build<T>(
+        device: &cpal::Device,
+        cfg: &cpal::StreamConfig,
+        buf: std::sync::Arc<std::sync::Mutex<Vec<i16>>>,
+        channels: usize,
+    ) -> Result<cpal::Stream>
+    where
+        T: SizedSample + Send + 'static,
+        f32: FromSample<T>,
+    {
+        let sink = buf.clone();
+        let stream = device.build_input_stream(
+            cfg,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                let mut g = sink.lock().unwrap();
+                let mut i = 0;
+                while i < data.len() {
+                    let mut acc = 0f32;
+                    let mut n = 0;
+                    for _ in 0..channels.max(1) {
+                        if i < data.len() {
+                            acc += f32::from_sample(data[i]);
+                            n += 1;
+                            i += 1;
+                        }
+                    }
+                    let v = if n > 0 { acc / n as f32 } else { 0.0 };
+                    g.push((v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
+                }
+            },
+            |e| eprintln!("mic: {e}"),
+            None,
+        )?;
+        Ok(stream)
+    }
+
+    let host = cpal::default_host();
+    let device = host.default_input_device().context("no input device")?;
+    let supported = device.default_input_config()?;
+    let fmt = supported.sample_format();
+    let cfg: cpal::StreamConfig = supported.into();
+    let ch = cfg.channels as usize;
+    match fmt {
+        cpal::SampleFormat::F32 => build::<f32>(&device, &cfg, buf, ch),
+        cpal::SampleFormat::I16 => build::<i16>(&device, &cfg, buf, ch),
+        cpal::SampleFormat::U16 => build::<u16>(&device, &cfg, buf, ch),
+        other => bail!("unsupported sample format {other:?}"),
+    }
+}
 #[cfg(windows)]
 pub fn record_loopback_wav(secs: u64) -> Result<Vec<u8>> {
     use windows::Win32::Media::Audio::{

