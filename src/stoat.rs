@@ -200,6 +200,22 @@ impl Stoat {
         Ok(r.bytes().await?.to_vec())
     }
 
+    /// DELETE /channels/{id} — removes a channel (needs ManageChannel).
+    pub async fn delete_channel(&self, id: &str) -> Result<()> {
+        let r = self
+            .http
+            .delete(format!("{}/channels/{}", self.api, id))
+            .header("X-Bot-Token", &self.token)
+            .send()
+            .await?;
+        if !r.status().is_success() {
+            let s = r.status();
+            let t = r.text().await.unwrap_or_default();
+            bail!("delete channel -> {s}: {}", trim(&t));
+        }
+        Ok(())
+    }
+
     pub async fn delete_message(&self, channel: &str, id: &str) -> Result<bool> {
         let r = self
             .http
