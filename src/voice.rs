@@ -90,9 +90,13 @@ pub async fn ensure_voice_channel(st: &Stoat, ws: &Workspace) -> Result<String> 
 pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
     STOP.store(false, Ordering::SeqCst);
     let (token, url, channel) = join_voice(st, ws).await?;
-    let (room, _events) = Room::connect(&url, &token, RoomOptions::default())
+    let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
         .await
         .context("livekit connect")?;
+    // MUST keep the event receiver alive — dropping it tears the room down.
+    tokio::spawn(async move {
+        while events.recv().await.is_some() {}
+    });
 
     let (_, w, h) = crate::capture::virtual_desktop_rgba()?;
     let source = NativeVideoSource::new(VideoResolution { width: w, height: h }, true);
@@ -104,6 +108,12 @@ pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<St
     room.local_participant()
         .publish_track(LocalTrack::Video(track), opts)
         .await?;
+    let _ = st
+        .send(
+            &ws.channels.console,
+            &format!("screenshare live — join the voice channel ({channel}) to watch"),
+        )
+        .await;
 
     while !STOP.load(Ordering::SeqCst) {
         if let Ok((raw, w2, h2)) = crate::capture::virtual_desktop_rgba() {
@@ -122,9 +132,13 @@ pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<St
 pub async fn voice_mic(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
     STOP.store(false, Ordering::SeqCst);
     let (token, url, channel) = join_voice(st, ws).await?;
-    let (room, _events) = Room::connect(&url, &token, RoomOptions::default())
+    let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
         .await
         .context("livekit connect")?;
+    // MUST keep the event receiver alive — dropping it tears the room down.
+    tokio::spawn(async move {
+        while events.recv().await.is_some() {}
+    });
 
     let rate = 48_000u32;
     let source = NativeAudioSource::new(AudioSourceOptions::default(), rate, 1, 100);
@@ -136,6 +150,12 @@ pub async fn voice_mic(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<Stri
     room.local_participant()
         .publish_track(LocalTrack::Audio(track), opts)
         .await?;
+    let _ = st
+        .send(
+            &ws.channels.console,
+            &format!("mic live — join the voice channel ({channel}) to listen"),
+        )
+        .await;
 
     // cpal capture into a shared buffer. The Stream is !Send, so it lives entirely inside
     // a blocking task; the async loop only drains samples and pushes frames.

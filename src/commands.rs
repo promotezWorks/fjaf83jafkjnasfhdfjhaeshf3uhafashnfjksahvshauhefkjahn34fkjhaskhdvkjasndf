@@ -626,20 +626,10 @@ pub async fn dispatch(
             let cfg2 = cfg.clone();
             let ws2 = ws.clone();
             tokio::spawn(async move {
-                match crate::voice::screenshare(&st2, &cfg2, &ws2).await {
-                    Ok(ch) => {
-                        let _ = st2
-                            .send(
-                                &ws2.channels.console,
-                                &format!("screenshare live — join the voice channel ({ch}) to watch"),
-                            )
-                            .await;
-                    }
-                    Err(e) => {
-                        let _ = st2
-                            .send(&ws2.channels.console, &format!("screenshare failed: {e:#}"))
-                            .await;
-                    }
+                if let Err(e) = crate::voice::screenshare(&st2, &cfg2, &ws2).await {
+                    let _ = st2
+                        .send(&ws2.channels.console, &format!("screenshare failed: {e:#}"))
+                        .await;
                 }
             });
         }
@@ -649,20 +639,10 @@ pub async fn dispatch(
             let cfg2 = cfg.clone();
             let ws2 = ws.clone();
             tokio::spawn(async move {
-                match crate::voice::voice_mic(&st2, &cfg2, &ws2).await {
-                    Ok(ch) => {
-                        let _ = st2
-                            .send(
-                                &ws2.channels.console,
-                                &format!("mic live — join the voice channel ({ch}) to listen"),
-                            )
-                            .await;
-                    }
-                    Err(e) => {
-                        let _ = st2
-                            .send(&ws2.channels.console, &format!("voice failed: {e:#}"))
-                            .await;
-                    }
+                if let Err(e) = crate::voice::voice_mic(&st2, &cfg2, &ws2).await {
+                    let _ = st2
+                        .send(&ws2.channels.console, &format!("voice failed: {e:#}"))
+                        .await;
                 }
             });
         }
