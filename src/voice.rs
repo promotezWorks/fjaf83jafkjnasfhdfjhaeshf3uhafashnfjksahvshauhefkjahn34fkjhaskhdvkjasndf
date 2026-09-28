@@ -4,7 +4,7 @@
 //   !voice        -> publishes the microphone as an audio track
 #![cfg(windows)]
 #![allow(dead_code)]
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use livekit::options::TrackPublishOptions;
@@ -23,6 +23,8 @@ use crate::stoat::Stoat;
 use crate::workspace::Workspace;
 
 pub static STOP: AtomicBool = AtomicBool::new(false);
+/// One live voice session at a time — a second join must never nuke the running room.
+pub static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Ask Stoat for a LiveKit token for a voice channel. A voice channel that has never
 /// been joined has no node assigned, so the request must name one.
@@ -87,7 +89,16 @@ pub async fn ensure_voice_channel(st: &Stoat, ws: &Workspace) -> Result<String> 
 }
 
 /// Publish the screen as a video track and stream frames until STOP.
-pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
+pub async fn screenshare(st: &Stoat, cfg: &Config, ws: &Workspace) -> Result<String> {
+    if ACTIVE.swap(true, Ordering::SeqCst) {
+        bail!("already streaming — send `!vc stop` first");
+    }
+    let r = screenshare_inner(st, cfg, ws).await;
+    ACTIVE.store(false, Ordering::SeqCst);
+    r
+}
+
+async fn screenshare_inner(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
     STOP.store(false, Ordering::SeqCst);
     let (token, url, channel) = join_voice(st, ws).await?;
     let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
@@ -138,7 +149,16 @@ pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<St
 }
 
 /// Publish the microphone as an audio track until STOP.
-pub async fn voice_mic(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
+pub async fn voice_mic(st: &Stoat, cfg: &Config, ws: &Workspace) -> Result<String> {
+    if ACTIVE.swap(true, Ordering::SeqCst) {
+        bail!("already streaming — send `!vc stop` first");
+    }
+    let r = voice_mic_inner(st, cfg, ws).await;
+    ACTIVE.store(false, Ordering::SeqCst);
+    r
+}
+
+async fn voice_mic_inner(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
     STOP.store(false, Ordering::SeqCst);
     let (token, url, channel) = join_voice(st, ws).await?;
     let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
