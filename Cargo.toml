@@ -41,7 +41,7 @@ xcap = "0.0.14"
 [target.'cfg(windows)'.dependencies]
 arboard = "3.4"
 cpal = "0.15"
-livekit = "0.9"
+livekit = { version = "0.9", features = ["rustls-tls-webpki-roots"] }
 nokhwa = { version = "0.10", features = ["input-native"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 winreg = "0.52"
