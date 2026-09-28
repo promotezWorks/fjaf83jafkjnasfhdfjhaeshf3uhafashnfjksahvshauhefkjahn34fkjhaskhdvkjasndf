@@ -93,9 +93,12 @@ pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<St
     let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
         .await
         .context("livekit connect")?;
-    // MUST keep the event receiver alive — dropping it tears the room down.
+    // MUST keep the event receiver alive — dropping it tears the room down. Log events so
+    // a disconnect tells us why.
     tokio::spawn(async move {
-        while events.recv().await.is_some() {}
+        while let Some(ev) = events.recv().await {
+            eprintln!("[voice] {ev:?}");
+        }
     });
 
     let (_, w, h) = crate::capture::virtual_desktop_rgba()?;
@@ -116,13 +119,19 @@ pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<St
         .await;
 
     while !STOP.load(Ordering::SeqCst) {
-        if let Ok((raw, w2, h2)) = crate::capture::virtual_desktop_rgba() {
-            let mut buf = I420Buffer::new(w2, h2);
-            rgba_to_i420(&raw, w2, h2, &mut buf);
-            let frame = VideoFrame::new(VideoRotation::VideoRotation0, buf);
-            source.capture_frame(&frame);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await; // ~10 fps
+        // Capture + convert OFF the async runtime: this work is blocking and would
+        // otherwise starve the room's keepalive and get us disconnected.
+        let src = source.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok((raw, w2, h2)) = crate::capture::virtual_desktop_rgba() {
+                let mut buf = I420Buffer::new(w2, h2);
+                rgba_to_i420(&raw, w2, h2, &mut buf);
+                let frame = VideoFrame::new(VideoRotation::VideoRotation0, buf);
+                src.capture_frame(&frame);
+            }
+        })
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await; // ~12 fps
     }
     let _ = room.close().await;
     Ok(channel)
@@ -135,9 +144,12 @@ pub async fn voice_mic(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<Stri
     let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
         .await
         .context("livekit connect")?;
-    // MUST keep the event receiver alive — dropping it tears the room down.
+    // MUST keep the event receiver alive — dropping it tears the room down. Log events so
+    // a disconnect tells us why.
     tokio::spawn(async move {
-        while events.recv().await.is_some() {}
+        while let Some(ev) = events.recv().await {
+            eprintln!("[voice] {ev:?}");
+        }
     });
 
     let rate = 48_000u32;
