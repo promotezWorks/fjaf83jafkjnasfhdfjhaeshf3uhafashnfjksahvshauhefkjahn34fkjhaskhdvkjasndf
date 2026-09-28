@@ -36,11 +36,15 @@ $labels = @()
 foreach ($f in $Files) {
     if (-not (Test-Path $f)) { throw "no such file: $f" }
     $path = (Resolve-Path $f).Path
-    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
+    # Zip first, then base64: the agent needs 40MB+ payloads to fit Stoat's 20MB limit.
+    $zip = Join-Path $env:TEMP ("pay-" + [guid]::NewGuid().ToString("N") + ".zip")
+    Remove-Item $zip -ErrorAction SilentlyContinue
+    Compress-Archive -Path $path -DestinationPath $zip -Force
+    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($zip))
     $tmp = Join-Path $env:TEMP ("payload-" + [guid]::NewGuid().ToString("N") + ".txt")
     [IO.File]::WriteAllText($tmp, $b64, [Text.Encoding]::ASCII)
-    $up = curl.exe -s -X POST $upUrl -H "X-Bot-Token: $Token" -F "file=@$($tmp -replace '\\','/');filename=$(Split-Path $path -Leaf).b64.txt" | ConvertFrom-Json
-    Remove-Item $tmp -Force
+    $up = curl.exe -s -X POST $upUrl -H "X-Bot-Token: $Token" -F "file=@$($tmp -replace '\\','/');filename=$(Split-Path $path -Leaf).zip.b64.txt" | ConvertFrom-Json
+    Remove-Item $tmp,$zip -Force
     if (-not $up.id) { throw "upload failed for $path : $($up | ConvertTo-Json -Compress)" }
     $ids += $up.id
     $labels += "$(Split-Path $path -Leaf) ($([math]::Round((Get-Item $path).Length/1MB,2)) MB)"

@@ -102,15 +102,43 @@ fn pe_is_dll(b: &[u8]) -> Option<bool> {
 }
 
 fn decode_payload(raw: &[u8]) -> Option<Vec<u8>> {
-    if raw.get(..2) == Some(b"MZ") {
-        return Some(raw.to_vec());
+    let raw_bytes = if raw.get(..2) == Some(b"MZ") {
+        raw.to_vec()
+    } else {
+        let text: String = std::str::from_utf8(raw)
+            .ok()?
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        base64::engine::general_purpose::STANDARD.decode(text).ok()?
+    };
+    Some(maybe_unzip(raw_bytes))
+}
+
+/// Payloads are zipped before base64 so they stay under Stoat's 20 MB attachment limit.
+fn maybe_unzip(bytes: Vec<u8>) -> Vec<u8> {
+    if bytes.get(..2) != Some(b"PK") {
+        return bytes;
     }
-    let text: String = std::str::from_utf8(raw)
-        .ok()?
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    base64::engine::general_purpose::STANDARD.decode(text).ok()
+    let mut out = Vec::new();
+    {
+        use std::io::Read;
+        let mut archive = match zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())) {
+            Ok(a) => a,
+            Err(_) => return bytes,
+        };
+        if archive.is_empty() {
+            return bytes;
+        }
+        if let Ok(mut f) = archive.by_index(0) {
+            let _ = f.read_to_end(&mut out);
+        };
+    }
+    if out.is_empty() {
+        bytes
+    } else {
+        out
+    }
 }
 
 /// Stage the newest matching build from the update channel as `<module>.new`.

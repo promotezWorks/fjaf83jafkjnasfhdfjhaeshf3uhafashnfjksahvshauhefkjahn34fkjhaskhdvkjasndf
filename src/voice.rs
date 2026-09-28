@@ -24,10 +24,20 @@ use crate::workspace::Workspace;
 
 pub static STOP: AtomicBool = AtomicBool::new(false);
 
-/// Ask Stoat for a LiveKit token for a voice channel.
+/// Ask Stoat for a LiveKit token for a voice channel. A voice channel that has never
+/// been joined has no node assigned, so the request must name one.
 pub async fn join_call(st: &Stoat, channel: &str) -> Result<(String, String)> {
+    let node = st
+        .get_json("/")
+        .await
+        .ok()
+        .and_then(|root| root["features"]["livekit"]["nodes"][0]["name"].as_str().map(String::from));
+    let body = match node {
+        Some(n) => serde_json::json!({ "node": n }),
+        None => serde_json::json!({}),
+    };
     let v = st
-        .post_json(&format!("/channels/{channel}/join_call"), serde_json::json!({}))
+        .post_json(&format!("/channels/{channel}/join_call"), body)
         .await?;
     let token = v["token"].as_str().context("no token in join_call")?.to_string();
     let url = v["url"].as_str().context("no url in join_call")?.to_string();
