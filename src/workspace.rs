@@ -91,8 +91,10 @@ pub async fn ensure_in_server(st: &Stoat, server: &str) -> Result<Workspace> {
 
     // Resolve the three channels by name, verifying each still exists.
     let mut resolved: [Option<String>; 3] = [None, None, None];
+    let mut live: Vec<String> = Vec::new();
     for cid in &existing_channels {
         if let Ok(ch) = st.get_json(&format!("/channels/{cid}")).await {
+            live.push(cid.clone());
             if let Some(nm) = ch["name"].as_str() {
                 if let Some(i) = CHANNEL_NAMES.iter().position(|n| *n == nm) {
                     if resolved[i].is_none() {
@@ -104,9 +106,10 @@ pub async fn ensure_in_server(st: &Stoat, server: &str) -> Result<Workspace> {
     }
 
     // Create any missing channel. First, reuse a legacy single-channel category by renaming
-    // its existing channel to `console` instead of orphaning it.
+    // its existing channel to `console` instead of orphaning it. Only channels that still
+    // exist (`live`) are eligible — a deleted channel must not be reused.
     if resolved[0].is_none() {
-        if let Some(extra) = existing_channels
+        if let Some(extra) = live
             .iter()
             .find(|cid| !resolved.iter().flatten().any(|r| r == *cid))
             .cloned()
