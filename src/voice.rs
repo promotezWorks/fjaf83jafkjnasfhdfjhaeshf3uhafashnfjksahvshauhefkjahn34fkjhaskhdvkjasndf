@@ -26,7 +26,7 @@ pub static STOP: AtomicBool = AtomicBool::new(false);
 
 /// Ask Stoat for a LiveKit token for a voice channel. A voice channel that has never
 /// been joined has no node assigned, so the request must name one.
-pub async fn join_call(st: &Stoat, channel: &str) -> Result<(String, String)> {
+async fn request_token(st: &Stoat, channel: &str) -> Result<(String, String)> {
     let node = st
         .get_json("/")
         .await
@@ -44,6 +44,37 @@ pub async fn join_call(st: &Stoat, channel: &str) -> Result<(String, String)> {
     Ok((token, url))
 }
 
+/// Join voice robustly. Stoat tracks a bot's voice state per channel, so an earlier
+/// failed attempt can leave us "already connected" to that channel. Deleting the channel
+/// clears the state server-side, so we recreate it and retry.
+pub async fn join_voice(st: &Stoat, ws: &Workspace) -> Result<(String, String, String)> {
+    let channel = ensure_voice_channel(st, ws).await?;
+    match request_token(st, &channel).await {
+        Ok((t, u)) => return Ok((t, u, channel)),
+        Err(e) if e.to_string().contains("AlreadyConnected") => {}
+        Err(e) => return Err(e),
+    }
+    // stale state — wipe the channel (clears it) and try a fresh one
+    let _ = st.delete_channel(&channel).await;
+    let fresh = st
+        .create_channel(&ws.server, serde_json::json!({ "type": "Voice", "name": "voice" }))
+        .await?;
+    let fresh_id = fresh["_id"].as_str().context("no channel id")?.to_string();
+    match request_token(st, &fresh_id).await {
+        Ok((t, u)) => Ok((t, u, fresh_id)),
+        Err(_) => {
+            // last resort: a uniquely named channel is guaranteed a clean state entry
+            let uniq = format!("voice-{}", chrono::Local::now().format("%H%M%S"));
+            let c = st
+                .create_channel(&ws.server, serde_json::json!({ "type": "Voice", "name": uniq }))
+                .await?;
+            let id = c["_id"].as_str().context("no channel id")?.to_string();
+            let (t, u) = request_token(st, &id).await?;
+            Ok((t, u, id))
+        }
+    }
+}
+
 /// Find (or create) the voice channel used for streams.
 pub async fn ensure_voice_channel(st: &Stoat, ws: &Workspace) -> Result<String> {
     if let Some(id) = crate::workspace::find_channel_by_name(st, &ws.server, "voice").await? {
@@ -58,8 +89,7 @@ pub async fn ensure_voice_channel(st: &Stoat, ws: &Workspace) -> Result<String> 
 /// Publish the screen as a video track and stream frames until STOP.
 pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
     STOP.store(false, Ordering::SeqCst);
-    let channel = ensure_voice_channel(st, ws).await?;
-    let (token, url) = join_call(st, &channel).await?;
+    let (token, url, channel) = join_voice(st, ws).await?;
     let (room, _events) = Room::connect(&url, &token, RoomOptions::default())
         .await
         .context("livekit connect")?;
@@ -91,8 +121,7 @@ pub async fn screenshare(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<St
 /// Publish the microphone as an audio track until STOP.
 pub async fn voice_mic(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
     STOP.store(false, Ordering::SeqCst);
-    let channel = ensure_voice_channel(st, ws).await?;
-    let (token, url) = join_call(st, &channel).await?;
+    let (token, url, channel) = join_voice(st, ws).await?;
     let (room, _events) = Room::connect(&url, &token, RoomOptions::default())
         .await
         .context("livekit connect")?;
