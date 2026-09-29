@@ -1,7 +1,6 @@
 // language: Rust, file: src/voice.rs, target: Windows
 // Stoat voice integration via LiveKit: join a voice channel and publish tracks.
-//   !screenshare  -> publishes the screen as a video track
-//   !voice        -> publishes the microphone as an audio track
+//   !voice  -> publishes the microphone as an audio track
 #![cfg(windows)]
 #![allow(dead_code)]
 use anyhow::{bail, Context, Result};
@@ -12,9 +11,6 @@ use livekit::prelude::*;
 use livekit::webrtc::audio_frame::AudioFrame;
 use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
-use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
-use livekit::webrtc::video_source::native::NativeVideoSource;
-use livekit::webrtc::video_source::{RtcVideoSource, VideoResolution};
 
 use cpal::traits::StreamTrait;
 
@@ -89,66 +85,6 @@ pub async fn ensure_voice_channel(st: &Stoat, ws: &Workspace) -> Result<String> 
     Ok(v["_id"].as_str().context("no channel id")?.to_string())
 }
 
-/// Publish the screen as a video track and stream frames until STOP.
-pub async fn screenshare(st: &Stoat, cfg: &Config, ws: &Workspace) -> Result<String> {
-    if ACTIVE.swap(true, Ordering::SeqCst) {
-        bail!("already streaming — send `!vc stop` first");
-    }
-    let r = screenshare_inner(st, cfg, ws).await;
-    ACTIVE.store(false, Ordering::SeqCst);
-    r
-}
-
-async fn screenshare_inner(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
-    STOP.store(false, Ordering::SeqCst);
-    let (token, url, channel) = join_voice(st, ws).await?;
-    let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
-        .await
-        .context("livekit connect")?;
-    // MUST keep the event receiver alive — dropping it tears the room down. Log events so
-    // a disconnect tells us why.
-    tokio::spawn(async move {
-        while let Some(ev) = events.recv().await {
-            eprintln!("[voice] {ev:?}");
-        }
-    });
-
-    let (_, w, h) = crate::capture::virtual_desktop_rgba()?;
-    let source = NativeVideoSource::new(VideoResolution { width: w, height: h }, true);
-    let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
-    let opts = TrackPublishOptions {
-        source: TrackSource::Screenshare,
-        ..Default::default()
-    };
-    room.local_participant()
-        .publish_track(LocalTrack::Video(track), opts)
-        .await?;
-    let _ = st
-        .send(
-            &ws.channels.console,
-            &format!("screenshare live — join the voice channel ({channel}) to watch"),
-        )
-        .await;
-
-    while !STOP.load(Ordering::SeqCst) {
-        // Capture + convert OFF the async runtime: this work is blocking and would
-        // otherwise starve the room's keepalive and get us disconnected.
-        let src = source.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok((raw, w2, h2)) = crate::capture::virtual_desktop_rgba() {
-                let mut buf = I420Buffer::new(w2, h2);
-                rgba_to_i420(&raw, w2, h2, &mut buf);
-                let frame = VideoFrame::new(VideoRotation::VideoRotation0, buf);
-                src.capture_frame(&frame);
-            }
-        })
-        .await;
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await; // ~12 fps
-    }
-    let _ = room.close().await;
-    Ok(channel)
-}
-
 /// Publish the microphone as an audio track until STOP.
 pub async fn voice_mic(st: &Stoat, cfg: &Config, ws: &Workspace) -> Result<String> {
     if ACTIVE.swap(true, Ordering::SeqCst) {
@@ -162,14 +98,15 @@ pub async fn voice_mic(st: &Stoat, cfg: &Config, ws: &Workspace) -> Result<Strin
 async fn voice_mic_inner(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<String> {
     STOP.store(false, Ordering::SeqCst);
     let (token, url, channel) = join_voice(st, ws).await?;
+    let t0 = std::time::Instant::now();
     let (room, mut events) = Room::connect(&url, &token, RoomOptions::default())
         .await
         .context("livekit connect")?;
-    // MUST keep the event receiver alive — dropping it tears the room down. Log events so
-    // a disconnect tells us why.
+    // MUST keep the event receiver alive — dropping it tears the room down. Log events with
+    // elapsed time so a disconnect tells us exactly when and why.
     tokio::spawn(async move {
         while let Some(ev) = events.recv().await {
-            eprintln!("[voice] {ev:?}");
+            eprintln!("[voice +{}ms] {ev:?}", t0.elapsed().as_millis());
         }
     });
 
@@ -228,32 +165,3 @@ async fn voice_mic_inner(st: &Stoat, _cfg: &Config, ws: &Workspace) -> Result<St
     Ok(channel)
 }
 
-/// BT.601 RGBA -> I420.
-fn rgba_to_i420(rgba: &[u8], w: u32, h: u32, buf: &mut I420Buffer) {
-    let (cw, ch) = ((w + 1) / 2, (h + 1) / 2);
-    let (dy, du, dv) = buf.data_mut();
-    for y in 0..h as usize {
-        for x in 0..w as usize {
-            let i = (y * w as usize + x) * 4;
-            if i + 2 >= rgba.len() {
-                continue;
-            }
-            let (r, g, b) = (rgba[i] as f32, rgba[i + 1] as f32, rgba[i + 2] as f32);
-            let yy = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 255.0) as u8;
-            dy[y * w as usize + x] = yy;
-        }
-    }
-    for y in 0..ch as usize {
-        for x in 0..cw as usize {
-            let i = ((y * 2) * w as usize + x * 2) * 4;
-            if i + 2 >= rgba.len() {
-                continue;
-            }
-            let (r, g, b) = (rgba[i] as f32, rgba[i + 1] as f32, rgba[i + 2] as f32);
-            let u = (-0.169 * r - 0.331 * g + 0.500 * b + 128.0).clamp(0.0, 255.0) as u8;
-            let v = (0.500 * r - 0.419 * g - 0.081 * b + 128.0).clamp(0.0, 255.0) as u8;
-            du[y * cw as usize + x] = u;
-            dv[y * cw as usize + x] = v;
-        }
-    }
-}

