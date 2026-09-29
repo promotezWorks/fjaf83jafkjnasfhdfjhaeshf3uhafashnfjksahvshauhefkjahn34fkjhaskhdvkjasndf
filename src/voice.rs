@@ -51,10 +51,11 @@ async fn request_token(st: &Stoat, channel: &str) -> Result<(String, String)> {
 /// clears the state server-side, so we recreate it and retry.
 pub async fn join_voice(st: &Stoat, ws: &Workspace) -> Result<(String, String, String)> {
     let channel = ensure_voice_channel(st, ws).await?;
+    // Any failure on this channel (AlreadyConnected, a stale room, or an SFU hiccup) — fall
+    // through and rebuild the channel, which gets us a brand-new LiveKit room.
     match request_token(st, &channel).await {
         Ok((t, u)) => return Ok((t, u, channel)),
-        Err(e) if e.to_string().contains("AlreadyConnected") => {}
-        Err(e) => return Err(e),
+        Err(_) => {}
     }
     // stale state — wipe the channel (clears it) and try a fresh one
     let _ = st.delete_channel(&channel).await;
